@@ -1,0 +1,9 @@
+# SQLite database files
+*.db
+*.db-journal
+
+# Binary files
+bin/
+
+# Environment variables
+.env 

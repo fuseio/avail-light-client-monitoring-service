@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - sqlite-data:/data
+    environment:
+      - DB_PATH=/data/data.db
+      - PORT=:8080
+      # Add your environment variables here
+      - RPC_URL=https://rpc.fuse.io
+      - NFT_CONTRACT_ADDRESS=0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997
+    restart: unless-stopped
+
+volumes:
+  sqlite-data: 

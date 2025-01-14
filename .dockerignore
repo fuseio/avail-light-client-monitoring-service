@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Database files
+*.db
+*.db-journal
+
+# Binary files
+bin/
+
+# IDE specific files
+.idea/
+.vscode/
+
+# Misc
+README.md 
