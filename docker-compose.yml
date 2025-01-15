@@ -10,10 +10,10 @@ services:
     environment:
       - DB_PATH=/data/data.db
       - PORT=:8080
-      # Add your environment variables here
       - RPC_URL=https://rpc.fuse.io
       - NFT_CONTRACT_ADDRESS=0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997
+      # Add any other environment variables your application needs
     restart: unless-stopped
 
 volumes:
-  sqlite-data: 
+  sqlite-data:

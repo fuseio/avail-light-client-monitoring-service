@@ -36,9 +36,6 @@ WORKDIR /app
 # Copy the binary from builder
 COPY --from=builder /app/bin/server .
 
-# Copy .env file if it exists (optional)
-COPY --from=builder /app/.env* ./ 
-
 # Use non-root user
 USER appuser
 
@@ -46,4 +43,4 @@ USER appuser
 EXPOSE 8080
 
 # Run the application
-CMD ["./server"] 
+CMD ["./server"]

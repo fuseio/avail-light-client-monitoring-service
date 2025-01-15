@@ -1,34 +1,42 @@
 package config
 
 import (
+	"errors"
 	"os"
-
-	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	DBPath          string
 	Port            string
+	DBPath          string
 	RpcURL          string
 	NFTContractAddr string
 }
 
 func LoadConfig() (*Config, error) {
-	if err := godotenv.Load(); err != nil {
-		return nil, err
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = ":8080" // default port
+	}
+
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		return nil, errors.New("DB_PATH environment variable is required")
+	}
+
+	rpcURL := os.Getenv("RPC_URL")
+	if rpcURL == "" {
+		return nil, errors.New("RPC_URL environment variable is required")
+	}
+
+	nftContractAddr := os.Getenv("NFT_CONTRACT_ADDRESS")
+	if nftContractAddr == "" {
+		return nil, errors.New("NFT_CONTRACT_ADDRESS environment variable is required")
 	}
 
 	return &Config{
-		DBPath:          getEnv("DB_PATH", "./data.db"),
-		Port:            getEnv("PORT", ":8080"),
-		RpcURL:          getEnv("RPC_URL", ""),
-		NFTContractAddr: getEnv("NFT_CONTRACT_ADDRESS", ""),
+		Port:            port,
+		DBPath:          dbPath,
+		RpcURL:          rpcURL,
+		NFTContractAddr: nftContractAddr,
 	}, nil
-}
-
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return fallback
 }
