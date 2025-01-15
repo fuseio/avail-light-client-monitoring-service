@@ -76,8 +76,14 @@ func setupRouter(db *database.Database, nftChecker *blockchain.NFTChecker) http.
 	// Add health check endpoint
 	mux.HandleFunc("/health", logRequest(handlers.HealthCheck))
 
-	// Add register endpoint
-	mux.HandleFunc("/check-nft", logRequest(handlers.CheckNFT(db, nftChecker)))
+	// Modified to only accept POST requests
+	mux.HandleFunc("/check-nft", logRequest(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handlers.CheckNFT(db, nftChecker)(w, r)
+	}))
 
 	return mux
 }

@@ -44,7 +44,7 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 		// Check if address owns NFT
 		hasNFT, err := nftChecker.HasNFT(req.Address)
 		if err != nil {
-			http.Error(w, "Failed to verify NFT ownership", http.StatusInternalServerError)
+			http.Error(w, "Failed to verify NFT ownership", http.StatusForbidden)
 			return
 		}
 
