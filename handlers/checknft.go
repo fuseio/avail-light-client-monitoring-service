@@ -4,11 +4,14 @@ import (
 	"avail-light-client-monitoring-service/blockchain"
 	"avail-light-client-monitoring-service/database"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 )
 
 type CheckNFTRequest struct {
 	Address string `json:"address"`
+	TokenID string `json:"token_id"` // TokenID as string to handle large numbers
 }
 
 type CheckNFTResponse struct {
@@ -23,14 +26,42 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 			return
 		}
 
+		response := CheckNFTResponse{
+			Status:  "success",
+			Message: "Client is registered and owns required NFT",
+		}
+
 		var req CheckNFTRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
 
+		// Validate required fields
 		if req.Address == "" {
-			http.Error(w, "Address is required", http.StatusBadRequest)
+			response.Status = "error"
+			response.Message = "Address is required"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		if req.TokenID == "" {
+			response.Status = "error"
+			response.Message = "Token ID is required"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Convert TokenID string to big.Int
+		tokenID := new(big.Int)
+		tokenID, success := tokenID.SetString(req.TokenID, 10)
+		if !success {
+			response.Status = "error"
+			response.Message = "Invalid Token ID format"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 
@@ -41,15 +72,19 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 			return
 		}
 
-		// Check if address owns NFT
-		hasNFT, err := nftChecker.HasNFT(req.Address)
+		// Check if address owns NFT with specific token ID
+		hasNFT, err := nftChecker.HasNFT(req.Address, tokenID)
 		if err != nil {
+			fmt.Printf("Error checking NFT ownership: %v\n", err)
 			http.Error(w, "Failed to verify NFT ownership", http.StatusForbidden)
 			return
 		}
 
 		if !hasNFT {
-			http.Error(w, "Address does not own required NFT", http.StatusForbidden)
+			response.Status = "error"
+			response.Message = "Address does not own required NFT"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 
@@ -58,11 +93,6 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 				http.Error(w, "Failed to register client", http.StatusInternalServerError)
 				return
 			}
-		}
-
-		response := CheckNFTResponse{
-			Status:  "success",
-			Message: "Client is registered and owns required NFT",
 		}
 
 		w.Header().Set("Content-Type", "application/json")

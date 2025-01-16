@@ -27,21 +27,27 @@ func NewNFTChecker(rpcURL string, contractAddress string) (*NFTChecker, error) {
 	}, nil
 }
 
-func (n *NFTChecker) HasNFT(address string) (bool, error) {
-	// Basic ERC721 balanceOf function signature
-	balanceOfSig := "balanceOf(address)"
+func (n *NFTChecker) HasNFT(address string, tokenID *big.Int) (bool, error) {
+	// ERC1155 balanceOf function signature
+	balanceOfSig := "0x00fdd58e" // balanceOf(address,uint256)
 
 	addr := common.HexToAddress(address)
 
-	data, err := n.client.CallContract(context.Background(), ethereum.CallMsg{
+	// Pack the address and token ID
+	paddedAddr := common.LeftPadBytes(addr.Bytes(), 32)
+	paddedTokenID := common.LeftPadBytes(tokenID.Bytes(), 32)
+
+	data := append(common.FromHex(balanceOfSig), append(paddedAddr, paddedTokenID...)...)
+
+	result, err := n.client.CallContract(context.Background(), ethereum.CallMsg{
 		To:   &n.contractAddr,
-		Data: common.FromHex(balanceOfSig + fmt.Sprintf("%064x", addr.Big())),
+		Data: data,
 	}, nil)
 
 	if err != nil {
 		return false, fmt.Errorf("contract call failed: %v", err)
 	}
 
-	balance := new(big.Int).SetBytes(data)
+	balance := new(big.Int).SetBytes(result)
 	return balance.Cmp(big.NewInt(0)) > 0, nil
 }
