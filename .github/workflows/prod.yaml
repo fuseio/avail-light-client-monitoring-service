@@ -46,7 +46,7 @@ jobs:
         run: |
           docker push \
             --all-tags \
-            ${{ env.OVH_PRIVATE_REGISTRY_ENDPOINT }}/${{ env.OVH_PRIVATE_REGISTRY_REPOSITORY }}/$component
+            ${{ env.OVH_PRIVATE_REGISTRY_ENDPOINT }}/${{ env.OVH_PRIVATE_REGISTRY_REPOSITORY }}/avail-light-client-monitoring-service
 
   deploy:
     name: Deploy
