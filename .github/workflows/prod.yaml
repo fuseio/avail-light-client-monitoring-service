@@ -1,4 +1,4 @@
-name: Build & Deploy to Kubernetes [QA]
+name: Build & Deploy to Kubernetes [PROD]
 
 on:
   push:
