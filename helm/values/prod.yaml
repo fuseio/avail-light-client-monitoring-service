@@ -1,0 +1,97 @@
+# Default values for avail-light-client-monitoring-service.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: 743g6573.c1.va1.container-registry.ovh.us/fuseio/avail-light-client-monitoring-service
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets:
+  - name: regcred
+
+nameOverride: ""
+fullnameOverride: ""
+
+command: []
+
+args: []
+
+serviceAccount:
+  create: false
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsGroup: 1000
+  runAsUser: 1000
+
+securityContext:
+  runAsGroup: 1000
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: monitoring.avail.fuse.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: avail-light-client-monitoring-service-tls-certificate
+      hosts:
+        - monitoring.avail.fuse.io
+
+resources: {}
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+volumes: []
+
+volumeMounts:
+  - name: sqlite-db
+    mountPath: "/data"
+
+configMap:
+  db_path: "/data/data.db"
+  port: ":8080"
+  rpc_url: "https://rpc.fuse.io"
+  nft_contract_address: "0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997"
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+volumeClaimTemplates:
+  sqliteDb:
+    size: 5Gi
