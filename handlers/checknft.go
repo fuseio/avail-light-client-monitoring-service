@@ -89,8 +89,14 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 		}
 
 		if !exists {
-			if err := db.RegisterClient(req.Address); err != nil {
+			if err := db.RegisterClient(req.Address, req.TokenID); err != nil {
 				http.Error(w, "Failed to register client", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Update token ID if client already exists
+			if err := db.RegisterClient(req.Address, req.TokenID); err != nil {
+				http.Error(w, "Failed to update client token ID", http.StatusInternalServerError)
 				return
 			}
 		}

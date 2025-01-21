@@ -13,6 +13,13 @@ type Database struct {
 	logger *log.Logger
 }
 
+// Add this struct after the Database struct
+type ClientInfo struct {
+	Address   string    `json:"address"`
+	TokenID   string    `json:"token_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 func NewDatabase(dbPath string, logger *log.Logger) (*Database, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_journal_mode=WAL")
 	if err != nil {
@@ -44,11 +51,9 @@ func initializeTables(db *sql.DB) error {
 	// Add your table creation statements here
 	createTableSQL := `
 	CREATE TABLE IF NOT EXISTS clients (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		address TEXT NOT NULL,
-		status TEXT NOT NULL,
-		last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		address TEXT PRIMARY KEY,
+		token_id TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);`
 
 	_, err := db.Exec(createTableSQL)
@@ -59,18 +64,71 @@ func (d *Database) Close() error {
 	return d.db.Close()
 }
 
-func (d *Database) RegisterClient(address string) error {
-	query := `
-		INSERT INTO clients (address, status) 
-		VALUES (?, 'active')
-	`
-	_, err := d.db.Exec(query, address)
-	return err
+func (d *Database) RegisterClient(address, tokenID string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO clients (address, token_id) 
+		VALUES (?, ?)
+		ON CONFLICT(address) DO UPDATE SET token_id = excluded.token_id
+	`, address, tokenID)
+
+	if err != nil {
+		d.logger.Printf("Error registering client: %v", err)
+		return err
+	}
+	return nil
 }
 
 func (d *Database) ClientExists(address string) (bool, error) {
 	var exists bool
-	query := `SELECT EXISTS(SELECT 1 FROM clients WHERE address = ?)`
-	err := d.db.QueryRow(query, address).Scan(&exists)
-	return exists, err
+	err := d.db.QueryRow("SELECT EXISTS(SELECT 1 FROM clients WHERE address = ?)", address).Scan(&exists)
+	if err != nil {
+		d.logger.Printf("Error checking client existence: %v", err)
+		return false, err
+	}
+	return exists, nil
+}
+
+func (d *Database) GetClientTokenID(address string) (string, error) {
+	var tokenID string
+	err := d.db.QueryRow("SELECT token_id FROM clients WHERE address = ?", address).Scan(&tokenID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		d.logger.Printf("Error getting client token ID: %v", err)
+		return "", err
+	}
+	return tokenID, nil
+}
+
+// Add this new function at the end of the file
+func (d *Database) GetAllClients() ([]ClientInfo, error) {
+	rows, err := d.db.Query(`
+		SELECT address, token_id, created_at 
+		FROM clients 
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		d.logger.Printf("Error querying clients: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clients []ClientInfo
+	for rows.Next() {
+		var client ClientInfo
+		err := rows.Scan(&client.Address, &client.TokenID, &client.CreatedAt)
+		if err != nil {
+			d.logger.Printf("Error scanning client row: %v", err)
+			return nil, err
+		}
+		clients = append(clients, client)
+	}
+
+	if err = rows.Err(); err != nil {
+		d.logger.Printf("Error iterating client rows: %v", err)
+		return nil, err
+	}
+
+	return clients, nil
 }
