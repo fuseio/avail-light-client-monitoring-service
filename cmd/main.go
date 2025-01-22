@@ -85,6 +85,9 @@ func setupRouter(db *database.Database, nftChecker *blockchain.NFTChecker) http.
 		handlers.CheckNFT(db, nftChecker)(w, r)
 	}))
 
+	// Add new endpoint to get all clients
+	mux.HandleFunc("/clients", logRequest(handlers.GetClients(db)))
+
 	return mux
 }
 
