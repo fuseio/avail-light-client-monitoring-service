@@ -62,8 +62,8 @@ func (d *DelegationRegistry) CheckDelegateForToken(delegate, vault, contract com
 	return out, nil
 }
 
-func (d *DelegationRegistry) CheckDelegateForContract(delegate, vault, contract common.Address) (bool, error) {
-	data, err := d.parsedABI.Pack("checkDelegateForContract", delegate, vault, contract)
+func (d *DelegationRegistry) CheckDelegateForContract(delegate, vault, contract common.Address, rights [32]byte) (bool, error) {
+	data, err := d.parsedABI.Pack("checkDelegateForContract", delegate, vault, contract, rights)
 	if err != nil {
 		return false, fmt.Errorf("failed to pack data for checkDelegateForContract: %v", err)
 	}
@@ -84,8 +84,8 @@ func (d *DelegationRegistry) CheckDelegateForContract(delegate, vault, contract 
 	return out, nil
 }
 
-func (d *DelegationRegistry) CheckDelegateForAll(delegate, vault common.Address) (bool, error) {
-	data, err := d.parsedABI.Pack("checkDelegateForAll", delegate, vault)
+func (d *DelegationRegistry) CheckDelegateForAll(delegate, vault common.Address, rights [32]byte) (bool, error) {
+	data, err := d.parsedABI.Pack("checkDelegateForAll", delegate, vault, rights)
 	if err != nil {
 		return false, fmt.Errorf("failed to pack data for checkDelegateForAll: %v", err)
 	}

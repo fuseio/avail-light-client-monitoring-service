@@ -13,6 +13,7 @@ import (
 
 type CheckNFTRequest struct {
 	Address string `json:"address"`
+	Owner   string `json:"owner"`
 	TokenID string `json:"token_id"` // TokenID as string to handle large numbers
 }
 
@@ -87,10 +88,20 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 			checksumAddr := common.HexToAddress(req.Address)
 			contractAddr := nftChecker.GetContractAddress()
 
+			if req.Owner == "" {
+				response.Status = "error"
+				response.Message = "Address does not have NFT, and to check delegation status, Owner Address is required"
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+				return
+			}
+
+			ownerAddr := common.HexToAddress(req.Owner)
+
 			// Check ERC1155 delegation if still no access
 			if !hasNFT {
 				var rights [32]byte // Zero rights for basic delegation check
-				amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, contractAddr, contractAddr, tokenID, rights)
+				amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
 				if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
 					hasNFT = true
 				}
