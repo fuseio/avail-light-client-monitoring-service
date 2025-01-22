@@ -15,7 +15,7 @@ type NFTChecker struct {
 	contractAddr common.Address
 }
 
-func NewNFTChecker(rpcURL string, contractAddress string) (*NFTChecker, error) {
+func NewNFTChecker(rpcURL, contractAddress string) (*NFTChecker, error) {
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Ethereum client: %v", err)
@@ -50,4 +50,8 @@ func (n *NFTChecker) HasNFT(address string, tokenID *big.Int) (bool, error) {
 
 	balance := new(big.Int).SetBytes(result)
 	return balance.Cmp(big.NewInt(0)) > 0, nil
+}
+
+func (n *NFTChecker) GetContractAddress() common.Address {
+	return n.contractAddr
 }

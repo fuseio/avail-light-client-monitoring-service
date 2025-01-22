@@ -6,10 +6,11 @@ import (
 )
 
 type Config struct {
-	Port            string
-	DBPath          string
-	RpcURL          string
-	NFTContractAddr string
+	Port                 string
+	DBPath               string
+	RpcURL               string
+	NFTContractAddr      string
+	DelegateContractAddr string
 }
 
 func LoadConfig() (*Config, error) {
@@ -33,10 +34,16 @@ func LoadConfig() (*Config, error) {
 		return nil, errors.New("NFT_CONTRACT_ADDRESS environment variable is required")
 	}
 
+	delegateContractAddr := os.Getenv("DELEGATE_CONTRACT_ADDRESS")
+	if delegateContractAddr == "" {
+		return nil, errors.New("DELEGATE_CONTRACT_ADDRESS environment variable is required")
+	}
+
 	return &Config{
-		Port:            port,
-		DBPath:          dbPath,
-		RpcURL:          rpcURL,
-		NFTContractAddr: nftContractAddr,
+		Port:                 port,
+		DBPath:               dbPath,
+		RpcURL:               rpcURL,
+		NFTContractAddr:      nftContractAddr,
+		DelegateContractAddr: delegateContractAddr,
 	}, nil
 }
