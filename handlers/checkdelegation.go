@@ -12,6 +12,7 @@ import (
 
 type CheckDelegationRequest struct {
 	Address string `json:"address"`
+	Owner   string `json:"owner"`
 	TokenID string `json:"token_id"`
 }
 
@@ -70,32 +71,12 @@ func CheckDelegation(nftChecker *blockchain.NFTChecker, delegateRegistry *blockc
 		}
 
 		checksumAddr := common.HexToAddress(req.Address)
+		ownerAddr := common.HexToAddress(req.Owner)
 		contractAddr := nftChecker.GetContractAddress()
 		var rights [32]byte // Zero rights for basic delegation check
 
-		// Check token-level delegation
-		hasTokenDelegation, err := delegateRegistry.CheckDelegateForToken(checksumAddr, contractAddr, contractAddr, tokenID)
-		if err != nil {
-			fmt.Printf("Error checking token delegation: %v\n", err)
-		}
-		response.Details.HasTokenDelegation = hasTokenDelegation
-
-		// Check contract-level delegation
-		hasContractDelegation, err := delegateRegistry.CheckDelegateForContract(checksumAddr, contractAddr, contractAddr)
-		if err != nil {
-			fmt.Printf("Error checking contract delegation: %v\n", err)
-		}
-		response.Details.HasContractDelegation = hasContractDelegation
-
-		// Check wallet-level delegation
-		hasWalletDelegation, err := delegateRegistry.CheckDelegateForAll(checksumAddr, contractAddr)
-		if err != nil {
-			fmt.Printf("Error checking wallet delegation: %v\n", err)
-		}
-		response.Details.HasWalletDelegation = hasWalletDelegation
-
 		// Check ERC1155 delegation amount
-		amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, contractAddr, contractAddr, tokenID, rights)
+		amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
 		if err != nil {
 			fmt.Printf("Error checking ERC1155 delegation: %v\n", err)
 		} else if amount != nil {
