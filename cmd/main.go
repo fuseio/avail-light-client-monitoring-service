@@ -31,6 +31,12 @@ func main() {
 		logger.Fatalf("Failed to initialize NFT checker: %v", err)
 	}
 
+	// Initialize delegation registry
+	delegateRegistry, err := blockchain.NewDelegationRegistry(cfg.RpcURL, cfg.DelegateContractAddr)
+	if err != nil {
+		logger.Fatalf("Failed to initialize delegation registry: %v", err)
+	}
+
 	// Initialize database
 	db, err := database.NewDatabase(cfg.DBPath, logger)
 	if err != nil {
@@ -41,7 +47,7 @@ func main() {
 	// Initialize server
 	server := &http.Server{
 		Addr:    cfg.Port,
-		Handler: setupRouter(db, nftChecker),
+		Handler: setupRouter(db, nftChecker, delegateRegistry),
 	}
 
 	// Start server
@@ -70,22 +76,31 @@ func main() {
 	logger.Println("Server exited properly")
 }
 
-func setupRouter(db *database.Database, nftChecker *blockchain.NFTChecker) http.Handler {
+func setupRouter(db *database.Database, nftChecker *blockchain.NFTChecker, delegateRegistry *blockchain.DelegationRegistry) http.Handler {
 	mux := http.NewServeMux()
 
 	// Add health check endpoint
 	mux.HandleFunc("/health", logRequest(handlers.HealthCheck))
 
-	// Modified to only accept POST requests
+	// NFT check endpoint
 	mux.HandleFunc("/check-nft", logRequest(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		handlers.CheckNFT(db, nftChecker)(w, r)
+		handlers.CheckNFT(db, nftChecker, delegateRegistry)(w, r)
 	}))
 
-	// Add new endpoint to get all clients
+	// Delegation check endpoint
+	mux.HandleFunc("/check-delegation", logRequest(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handlers.CheckDelegation(nftChecker, delegateRegistry)(w, r)
+	}))
+
+	// Get all clients endpoint
 	mux.HandleFunc("/clients", logRequest(handlers.GetClients(db)))
 
 	return mux

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type CheckNFTRequest struct {
@@ -19,7 +21,7 @@ type CheckNFTResponse struct {
 	Message string `json:"message"`
 }
 
-func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.HandlerFunc {
+func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegateRegistry *blockchain.DelegationRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -28,7 +30,7 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 
 		response := CheckNFTResponse{
 			Status:  "success",
-			Message: "Client is registered and owns required NFT",
+			Message: "Client is registered and owns or has delegation for required NFT",
 		}
 
 		var req CheckNFTRequest
@@ -80,9 +82,24 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker) http.Han
 			return
 		}
 
+		// If no direct ownership, check delegations
+		if !hasNFT {
+			checksumAddr := common.HexToAddress(req.Address)
+			contractAddr := nftChecker.GetContractAddress()
+
+			// Check ERC1155 delegation if still no access
+			if !hasNFT {
+				var rights [32]byte // Zero rights for basic delegation check
+				amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, contractAddr, contractAddr, tokenID, rights)
+				if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
+					hasNFT = true
+				}
+			}
+		}
+
 		if !hasNFT {
 			response.Status = "error"
-			response.Message = "Address does not own required NFT"
+			response.Message = "Address does not own or have delegation for required NFT"
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
 			return
