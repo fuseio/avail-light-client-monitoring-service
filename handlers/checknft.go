@@ -83,35 +83,25 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 			return
 		}
 
+		var status database.OwnershipStatus
 		if hasNFT {
 			response.Status = "success"
 			response.Message = "Address owns NFT"
-		}
-
-		// If no direct ownership, check delegations
-		if !hasNFT {
+			status = database.OwnsNFT
+		} else {
 			checksumAddr := common.HexToAddress(req.Address)
 			contractAddr := nftChecker.GetContractAddress()
-
-			if req.Owner == "" {
-				response.Status = "error"
-				response.Message = "Address does not have NFT, and to check delegation status, Owner Address is required"
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
-				return
-			}
-
 			ownerAddr := common.HexToAddress(req.Owner)
+			rights := common.HexToHash("0x69706c6963656e73650000000000000000000000000000000000000000000000")
 
-			// Check ERC1155 delegation if still no access
-			if !hasNFT {
-				rights := common.HexToHash("0x69706c6963656e73650000000000000000000000000000000000000000000000")
-				amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
-				if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
-					hasNFT = true
-					response.Status = "success"
-					response.Message = "Address does not have NFT, but has delegation for required NFT"
-				}
+			amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
+			if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
+				hasNFT = true
+				response.Status = "success"
+				response.Message = "Address does not have NFT, but has delegation for required NFT"
+				status = database.HasDelegation
+			} else {
+				status = database.NoNFT
 			}
 		}
 
@@ -124,13 +114,13 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 		}
 
 		if !exists {
-			if err := db.RegisterClient(req.Address, req.TokenID); err != nil {
+			if err := db.RegisterClient(req.Address, req.TokenID, status); err != nil {
 				http.Error(w, "Failed to register client", http.StatusInternalServerError)
 				return
 			}
 		} else {
 			// Update token ID if client already exists
-			if err := db.RegisterClient(req.Address, req.TokenID); err != nil {
+			if err := db.RegisterClient(req.Address, req.TokenID, status); err != nil {
 				http.Error(w, "Failed to update client token ID", http.StatusInternalServerError)
 				return
 			}
