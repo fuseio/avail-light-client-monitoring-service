@@ -8,6 +8,14 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+type OwnershipStatus int
+
+const (
+	NoNFT         OwnershipStatus = iota // 0
+	OwnsNFT                              // 1
+	HasDelegation                        // 2
+)
+
 type Database struct {
 	db     *sql.DB
 	logger *log.Logger
@@ -15,9 +23,10 @@ type Database struct {
 
 // Add this struct after the Database struct
 type ClientInfo struct {
-	Address   string    `json:"address"`
-	TokenID   string    `json:"token_id"`
-	CreatedAt time.Time `json:"created_at"`
+	Address         string          `json:"address"`
+	TokenID         string          `json:"token_id"`
+	OwnershipStatus OwnershipStatus `json:"ownership_status"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 func NewDatabase(dbPath string, logger *log.Logger) (*Database, error) {
@@ -48,11 +57,11 @@ func NewDatabase(dbPath string, logger *log.Logger) (*Database, error) {
 }
 
 func initializeTables(db *sql.DB) error {
-	// Add your table creation statements here
 	createTableSQL := `
 	CREATE TABLE IF NOT EXISTS clients (
 		address TEXT PRIMARY KEY,
 		token_id TEXT NOT NULL,
+		ownership_status INTEGER NOT NULL DEFAULT 0,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);`
 
@@ -64,12 +73,14 @@ func (d *Database) Close() error {
 	return d.db.Close()
 }
 
-func (d *Database) RegisterClient(address, tokenID string) error {
+func (d *Database) RegisterClient(address, tokenID string, status OwnershipStatus) error {
 	_, err := d.db.Exec(`
-		INSERT INTO clients (address, token_id) 
-		VALUES (?, ?)
-		ON CONFLICT(address) DO UPDATE SET token_id = excluded.token_id
-	`, address, tokenID)
+		INSERT INTO clients (address, token_id, ownership_status) 
+		VALUES (?, ?, ?)
+		ON CONFLICT(address) DO UPDATE SET 
+			token_id = excluded.token_id,
+			ownership_status = excluded.ownership_status
+	`, address, tokenID, status)
 
 	if err != nil {
 		d.logger.Printf("Error registering client: %v", err)
@@ -104,7 +115,7 @@ func (d *Database) GetClientTokenID(address string) (string, error) {
 // Add this new function at the end of the file
 func (d *Database) GetAllClients() ([]ClientInfo, error) {
 	rows, err := d.db.Query(`
-		SELECT address, token_id, created_at 
+		SELECT address, token_id, ownership_status, created_at 
 		FROM clients 
 		ORDER BY created_at DESC
 	`)
@@ -117,7 +128,7 @@ func (d *Database) GetAllClients() ([]ClientInfo, error) {
 	var clients []ClientInfo
 	for rows.Next() {
 		var client ClientInfo
-		err := rows.Scan(&client.Address, &client.TokenID, &client.CreatedAt)
+		err := rows.Scan(&client.Address, &client.TokenID, &client.OwnershipStatus, &client.CreatedAt)
 		if err != nil {
 			d.logger.Printf("Error scanning client row: %v", err)
 			return nil, err

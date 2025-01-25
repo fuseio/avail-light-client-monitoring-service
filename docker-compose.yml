@@ -13,7 +13,9 @@ services:
       - RPC_URL=https://rpc.fuse.io
       - NFT_CONTRACT_ADDRESS=0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997
       - DELEGATE_CONTRACT_ADDRESS=0xf8820d0bB4714aCc91aF7db8c67a967CA5fF3f74
-      # Add any other environment variables your application needs
+    # Add this to remove the database file before starting
+    # command: >
+    #   sh -c "rm -f /data/data.db* && ./server"
     restart: unless-stopped
 
 volumes:
