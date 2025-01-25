@@ -100,7 +100,7 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 
 			// Check ERC1155 delegation if still no access
 			if !hasNFT {
-				var rights [32]byte // Zero rights for basic delegation check
+				rights := common.HexToHash("0x69706c6963656e73650000000000000000000000000000000000000000000000")
 				amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
 				if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
 					hasNFT = true
