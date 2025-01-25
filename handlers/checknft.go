@@ -83,6 +83,11 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 			return
 		}
 
+		if hasNFT {
+			response.Status = "success"
+			response.Message = "Address owns NFT"
+		}
+
 		// If no direct ownership, check delegations
 		if !hasNFT {
 			checksumAddr := common.HexToAddress(req.Address)
@@ -104,6 +109,8 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 				amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
 				if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
 					hasNFT = true
+					response.Status = "success"
+					response.Message = "Address does not have NFT, but has delegation for required NFT"
 				}
 			}
 		}
