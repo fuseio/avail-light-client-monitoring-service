@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// Initialize database
-	db, err := database.NewDatabase(cfg.DBPath, logger)
+	db, err := database.NewDatabase(cfg.MongoURI, cfg.MongoDB, logger)
 	if err != nil {
 		logger.Fatalf("Failed to initialize database: %v", err)
 	}

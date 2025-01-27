@@ -1,11 +1,14 @@
 package database
 
 import (
-	"database/sql"
+	"context"
+	"fmt"
 	"log"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type OwnershipStatus int
@@ -17,71 +20,74 @@ const (
 )
 
 type Database struct {
-	db     *sql.DB
-	logger *log.Logger
+	client     *mongo.Client
+	collection *mongo.Collection
+	logger     *log.Logger
 }
 
 // Add this struct after the Database struct
 type ClientInfo struct {
-	Address         string          `json:"address"`
-	TokenID         string          `json:"token_id"`
-	OwnershipStatus OwnershipStatus `json:"ownership_status"`
-	CreatedAt       time.Time       `json:"created_at"`
+	Address         string          `bson:"address"`
+	TokenID         string          `bson:"token_id"`
+	OwnershipStatus OwnershipStatus `bson:"ownership_status"`
+	CreatedAt       time.Time       `bson:"created_at"`
 }
 
-func NewDatabase(dbPath string, logger *log.Logger) (*Database, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_journal_mode=WAL")
+func NewDatabase(mongoURI, dbName string, logger *log.Logger) (*Database, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to MongoDB: %v", err)
 	}
 
-	// Set connection pool settings
-	db.SetMaxOpenConns(1) // SQLite only supports one writer
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
-
-	// Test the connection
-	if err := db.Ping(); err != nil {
-		return nil, err
+	// Ping the database
+	if err := client.Ping(ctx, nil); err != nil {
+		return nil, fmt.Errorf("failed to ping MongoDB: %v", err)
 	}
 
-	// Initialize tables
-	if err := initializeTables(db); err != nil {
-		return nil, err
+	// Get collection using the provided database name
+	collection := client.Database(dbName).Collection("user")
+
+	// Create unique index on address if it doesn't exist
+	_, err = collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "address", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create index: %v", err)
 	}
 
 	return &Database{
-		db:     db,
-		logger: logger,
+		client:     client,
+		collection: collection,
+		logger:     logger,
 	}, nil
 }
 
-func initializeTables(db *sql.DB) error {
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS clients (
-		address TEXT PRIMARY KEY,
-		token_id TEXT NOT NULL,
-		ownership_status INTEGER NOT NULL DEFAULT 0,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-	);`
-
-	_, err := db.Exec(createTableSQL)
-	return err
-}
-
 func (d *Database) Close() error {
-	return d.db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return d.client.Disconnect(ctx)
 }
 
 func (d *Database) RegisterClient(address, tokenID string, status OwnershipStatus) error {
-	_, err := d.db.Exec(`
-		INSERT INTO clients (address, token_id, ownership_status) 
-		VALUES (?, ?, ?)
-		ON CONFLICT(address) DO UPDATE SET 
-			token_id = excluded.token_id,
-			ownership_status = excluded.ownership_status
-	`, address, tokenID, status)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
+	client := ClientInfo{
+		Address:         address,
+		TokenID:         tokenID,
+		OwnershipStatus: status,
+		CreatedAt:       time.Now(),
+	}
+
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"address": address}
+	update := bson.M{"$set": client}
+
+	_, err := d.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
 		d.logger.Printf("Error registering client: %v", err)
 		return err
@@ -90,54 +96,49 @@ func (d *Database) RegisterClient(address, tokenID string, status OwnershipStatu
 }
 
 func (d *Database) ClientExists(address string) (bool, error) {
-	var exists bool
-	err := d.db.QueryRow("SELECT EXISTS(SELECT 1 FROM clients WHERE address = ?)", address).Scan(&exists)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	count, err := d.collection.CountDocuments(ctx, bson.M{"address": address})
 	if err != nil {
 		d.logger.Printf("Error checking client existence: %v", err)
 		return false, err
 	}
-	return exists, nil
+	return count > 0, nil
 }
 
 func (d *Database) GetClientTokenID(address string) (string, error) {
-	var tokenID string
-	err := d.db.QueryRow("SELECT token_id FROM clients WHERE address = ?", address).Scan(&tokenID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var client ClientInfo
+	err := d.collection.FindOne(ctx, bson.M{"address": address}).Decode(&client)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err == mongo.ErrNoDocuments {
 			return "", nil
 		}
 		d.logger.Printf("Error getting client token ID: %v", err)
 		return "", err
 	}
-	return tokenID, nil
+	return client.TokenID, nil
 }
 
 // Add this new function at the end of the file
 func (d *Database) GetAllClients() ([]ClientInfo, error) {
-	rows, err := d.db.Query(`
-		SELECT address, token_id, ownership_status, created_at 
-		FROM clients 
-		ORDER BY created_at DESC
-	`)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
+	cursor, err := d.collection.Find(ctx, bson.M{}, opts)
 	if err != nil {
 		d.logger.Printf("Error querying clients: %v", err)
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 
 	var clients []ClientInfo
-	for rows.Next() {
-		var client ClientInfo
-		err := rows.Scan(&client.Address, &client.TokenID, &client.OwnershipStatus, &client.CreatedAt)
-		if err != nil {
-			d.logger.Printf("Error scanning client row: %v", err)
-			return nil, err
-		}
-		clients = append(clients, client)
-	}
-
-	if err = rows.Err(); err != nil {
-		d.logger.Printf("Error iterating client rows: %v", err)
+	if err = cursor.All(ctx, &clients); err != nil {
+		d.logger.Printf("Error decoding clients: %v", err)
 		return nil, err
 	}
 
