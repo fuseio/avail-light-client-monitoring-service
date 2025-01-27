@@ -7,7 +7,8 @@ import (
 
 type Config struct {
 	Port                 string
-	DBPath               string
+	MongoURI             string
+	MongoDB              string
 	RpcURL               string
 	NFTContractAddr      string
 	DelegateContractAddr string
@@ -19,9 +20,14 @@ func LoadConfig() (*Config, error) {
 		port = ":8080" // default port
 	}
 
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		return nil, errors.New("DB_PATH environment variable is required")
+	mongoURI := os.Getenv("MONGO_URI")
+	if mongoURI == "" {
+		return nil, errors.New("MONGO_URI environment variable is required")
+	}
+
+	mongoDB := os.Getenv("MONGO_DB")
+	if mongoDB == "" {
+		return nil, errors.New("MONGO_DB environment variable is required")
 	}
 
 	rpcURL := os.Getenv("RPC_URL")
@@ -41,7 +47,8 @@ func LoadConfig() (*Config, error) {
 
 	return &Config{
 		Port:                 port,
-		DBPath:               dbPath,
+		MongoURI:             mongoURI,
+		MongoDB:              mongoDB,
 		RpcURL:               rpcURL,
 		NFTContractAddr:      nftContractAddr,
 		DelegateContractAddr: delegateContractAddr,
