@@ -2,6 +2,14 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+externalSecrets:
+  secretStoreName: "external-secrets-hashicorp-vault"
+  remoteRefKey: "fuseio/avail-light-client-monitoring-service"
+  refreshInterval: "15s"
+  secretKey:
+    - mongo_uri
+    - mongo_db
+
 replicaCount: 1
 
 image:
@@ -40,7 +48,11 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 8080
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
 
 ingress:
   enabled: true
@@ -76,12 +88,9 @@ autoscaling:
 
 volumes: []
 
-volumeMounts:
-  - name: sqlite-db
-    mountPath: "/data"
+volumeMounts: []
 
 configMap:
-  db_path: "/data/data.db"
   port: ":8080"
   rpc_url: "https://rpc.fuse.io"
   nft_contract_address: "0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997"
@@ -92,7 +101,3 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
-
-volumeClaimTemplates:
-  sqliteDb:
-    size: 5Gi
