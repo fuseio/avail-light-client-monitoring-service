@@ -28,8 +28,10 @@ type Database struct {
 // Add this struct after the Database struct
 type ClientInfo struct {
 	Address         string          `bson:"address"`
-	TokenID         string          `bson:"token_id"`
-	OwnershipStatus OwnershipStatus `bson:"ownership_status"`
+	Runtime         int64 	       	`bson:"runtime"`
+	DelegationTime  int64       	`bson:"delegation_time"`
+	TotalTime       int64       	`bson:"total_time"`
+	LastHeartbeat   time.Time       `bson:"last_heartbeat"`
 	CreatedAt       time.Time       `bson:"created_at"`
 }
 
@@ -72,21 +74,27 @@ func (d *Database) Close() error {
 	return d.client.Disconnect(ctx)
 }
 
-func (d *Database) RegisterClient(address, tokenID string, status OwnershipStatus) error {
+func (d *Database) RegisterClient(address string, runtime int64, delegationTime int64, totalTime int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	client := ClientInfo{
-		Address:         address,
-		TokenID:         tokenID,
-		OwnershipStatus: status,
-		CreatedAt:       time.Now(),
+	now := time.Now()
+	filter := bson.M{"address": address}
+	
+	update := bson.M{
+		"$set": bson.M{
+			"address":         address,
+			"runtime":         runtime,
+			"delegation_time": delegationTime,
+			"total_time":     totalTime,
+			"last_heartbeat": now,
+		},
+		"$setOnInsert": bson.M{
+			"created_at": now,
+		},
 	}
 
 	opts := options.Update().SetUpsert(true)
-	filter := bson.M{"address": address}
-	update := bson.M{"$set": client}
-
 	_, err := d.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
 		d.logger.Printf("Error registering client: %v", err)
@@ -107,7 +115,7 @@ func (d *Database) ClientExists(address string) (bool, error) {
 	return count > 0, nil
 }
 
-func (d *Database) GetClientTokenID(address string) (string, error) {
+func (d *Database) GetClient(address string) (ClientInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -115,12 +123,12 @@ func (d *Database) GetClientTokenID(address string) (string, error) {
 	err := d.collection.FindOne(ctx, bson.M{"address": address}).Decode(&client)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return "", nil
+			return ClientInfo{}, nil
 		}
-		d.logger.Printf("Error getting client token ID: %v", err)
-		return "", err
+		d.logger.Printf("Error getting client: %v", err)
+		return ClientInfo{}, err
 	}
-	return client.TokenID, nil
+	return client, nil
 }
 
 // Add this new function at the end of the file

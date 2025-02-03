@@ -9,7 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"avail-light-client-monitoring-service/blockchain"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+
+	"avail-light-client-monitoring-service/blockchain/delegation"
+	"avail-light-client-monitoring-service/blockchain/nft"
 	"avail-light-client-monitoring-service/config"
 	"avail-light-client-monitoring-service/database"
 	"avail-light-client-monitoring-service/handlers"
@@ -26,13 +30,17 @@ func main() {
 	}
 
 	// Initialize NFT checker
-	nftChecker, err := blockchain.NewNFTChecker(cfg.RpcURL, cfg.NFTContractAddr)
+	nftChecker, err := nft.NewNFTChecker(cfg.RpcURL, cfg.NFTContractAddr)
 	if err != nil {
 		logger.Fatalf("Failed to initialize NFT checker: %v", err)
 	}
 
 	// Initialize delegation registry
-	delegateRegistry, err := blockchain.NewDelegationRegistry(cfg.RpcURL, cfg.DelegateContractAddr)
+	client, err := ethclient.Dial(cfg.RpcURL)
+	if err != nil {
+		logger.Fatalf("Failed to connect to Ethereum client: %v", err)
+	}
+	delegateRegistry, err := delegation.NewDelegationCaller(common.HexToAddress(cfg.DelegateContractAddr), client)
 	if err != nil {
 		logger.Fatalf("Failed to initialize delegation registry: %v", err)
 	}
@@ -76,7 +84,7 @@ func main() {
 	logger.Println("Server exited properly")
 }
 
-func setupRouter(db *database.Database, nftChecker *blockchain.NFTChecker, delegateRegistry *blockchain.DelegationRegistry) http.Handler {
+func setupRouter(db *database.Database, nftChecker *nft.NFTChecker, delegateRegistry *delegation.DelegationCaller) http.Handler {
 	mux := http.NewServeMux()
 
 	// Add health check endpoint
@@ -88,7 +96,7 @@ func setupRouter(db *database.Database, nftChecker *blockchain.NFTChecker, deleg
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		handlers.CheckNFT(db, nftChecker, delegateRegistry)(w, r)
+		handlers.CheckNFT(db, delegateRegistry)(w, r)
 	}))
 
 	// Delegation check endpoint

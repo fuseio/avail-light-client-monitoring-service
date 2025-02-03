@@ -1,20 +1,18 @@
 package handlers
 
 import (
-	"avail-light-client-monitoring-service/blockchain"
+	"avail-light-client-monitoring-service/blockchain/delegation"
+	"avail-light-client-monitoring-service/config"
 	"avail-light-client-monitoring-service/database"
 	"encoding/json"
-	"fmt"
-	"math/big"
 	"net/http"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
 
 type CheckNFTRequest struct {
 	Address string `json:"address"`
-	Owner   string `json:"owner"`
-	TokenID string `json:"token_id"` // TokenID as string to handle large numbers
 }
 
 type CheckNFTResponse struct {
@@ -22,7 +20,63 @@ type CheckNFTResponse struct {
 	Message string `json:"message"`
 }
 
-func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegateRegistry *blockchain.DelegationRegistry) http.HandlerFunc {
+func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int) error {
+	exists, err := db.ClientExists(address)
+	if err != nil {
+		return err
+	}
+
+	runtime := 0
+	delegationTime := 0
+	totalTime := 0
+
+	if exists {
+		client, err := db.GetClient(address)
+		if err != nil {
+			return err
+		}
+		
+		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
+			runtime = int(client.Runtime) + int(totalAmount) * int(time.Since(client.LastHeartbeat).Seconds())
+			totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
+		} else {
+			runtime = int(client.Runtime)
+			totalTime = int(client.TotalTime)
+		}
+	}
+
+	return db.RegisterClient(address, int64(runtime), int64(delegationTime), int64(totalTime))
+}
+
+func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int) error {
+	exists, err := db.ClientExists(address)
+	if err != nil {
+		return err
+	}
+
+	runtime := 0
+	delegationTime := 0
+	totalTime := 0
+
+	if exists {
+		client, err := db.GetClient(address)
+		if err != nil {
+			return err
+		}
+		
+		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
+			delegationTime = int(client.DelegationTime) + int(totalAmount) * int(time.Since(client.LastHeartbeat).Seconds())
+			totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
+		} else {
+			delegationTime = int(client.DelegationTime)
+			totalTime = int(client.TotalTime)
+		}
+	}
+
+	return db.RegisterClient(address, int64(runtime), int64(delegationTime), int64(totalTime))
+}
+
+func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -49,80 +103,70 @@ func CheckNFT(db *database.Database, nftChecker *blockchain.NFTChecker, delegate
 			return
 		}
 
-		if req.TokenID == "" {
-			response.Status = "error"
-			response.Message = "Token ID is required"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
-		// Convert TokenID string to big.Int
-		tokenID := new(big.Int)
-		tokenID, success := tokenID.SetString(req.TokenID, 10)
-		if !success {
-			response.Status = "error"
-			response.Message = "Invalid Token ID format"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
-		// First check if address is already registered
-		exists, err := db.ClientExists(req.Address)
+		// Load configuration
+		cfg, err := config.LoadConfig()
 		if err != nil {
-			http.Error(w, "Failed to check client registration", http.StatusInternalServerError)
+			http.Error(w, "Failed to load config", http.StatusInternalServerError)
 			return
 		}
 
-		// Check if address owns NFT with specific token ID
-		hasNFT, err := nftChecker.HasNFT(req.Address, tokenID)
+		incommingDelegation, err := delegateRegistry.GetIncomingDelegations(nil, common.HexToAddress(req.Address))
 		if err != nil {
-			fmt.Printf("Error checking NFT ownership: %v\n", err)
-			http.Error(w, "Failed to verify NFT ownership", http.StatusForbidden)
+			http.Error(w, "Failed to get incoming delegations", http.StatusInternalServerError)
 			return
 		}
+		if len(incommingDelegation) > 0 {
+			// filter by rights and contract address
+			var delegations []delegation.IDelegateRegistryDelegation
+			for _, delegation := range incommingDelegation {
+				delegationRights := [32]byte(delegation.Rights)
+				configRights := [32]byte(cfg.Rights)
+				if delegationRights == configRights && delegation.Contract == common.HexToAddress(cfg.NFTContractAddr) {
+					delegations = append(delegations, delegation)
+				}
+			}
 
-		var status database.OwnershipStatus
-		if hasNFT {
-			response.Status = "success"
-			response.Message = "Address owns NFT"
-			status = database.OwnsNFT
-		} else {
-			checksumAddr := common.HexToAddress(req.Address)
-			contractAddr := nftChecker.GetContractAddress()
-			ownerAddr := common.HexToAddress(req.Owner)
-			rights := common.HexToHash("0x69706c6963656e73650000000000000000000000000000000000000000000000")
+			// get map From address to token id and amount
+			tokenIdMap := make(map[string]struct {
+				TokenId string
+				Amount  int64
+			})
+			for _, delegation := range delegations {
+				tokenIdMap[delegation.From.String()] = struct {
+					TokenId string
+					Amount  int64
+				}{
+					TokenId: delegation.TokenId.String(),
+					Amount:  delegation.Amount.Int64(),
+				}
+			}
+			
+			// sum up all the amounts
+			var totalAmount int64
+			for _, amount := range tokenIdMap {
+				totalAmount += amount.Amount
+			}
 
-			amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
-			if err == nil && amount != nil && amount.Cmp(big.NewInt(0)) > 0 {
-				hasNFT = true
+			if totalAmount > 0 {
 				response.Status = "success"
-				response.Message = "Address does not have NFT, but has delegation for required NFT"
-				status = database.HasDelegation
+				response.Message = "Address has NFT or delegation for required NFT"
+
+				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval); err != nil {
+					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
+					return
+				}
+
+				// update delegation client registration
+				for key, amount := range tokenIdMap {
+					if key == req.Address { continue; }
+					if err := updateDelegationClientRegistration(db, key, amount.Amount, cfg.CheckNFTInterval); err != nil {
+						http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
+						return
+					}
+				}
 			} else {
-				status = database.NoNFT
-			}
-		}
-
-		if !hasNFT {
-			response.Status = "error"
-			response.Message = "Address does not own or have delegation for required NFT"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
-		if !exists {
-			if err := db.RegisterClient(req.Address, req.TokenID, status); err != nil {
-				http.Error(w, "Failed to register client", http.StatusInternalServerError)
-				return
-			}
-		} else {
-			// Update token ID if client already exists
-			if err := db.RegisterClient(req.Address, req.TokenID, status); err != nil {
-				http.Error(w, "Failed to update client token ID", http.StatusInternalServerError)
-				return
+				response.Status = "error"
+				response.Message = "Address does not own or have delegation for required NFT"
 			}
 		}
 
