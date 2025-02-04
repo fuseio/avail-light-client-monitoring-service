@@ -6,6 +6,7 @@ import (
 	"avail-light-client-monitoring-service/database"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,6 +14,7 @@ import (
 
 type CheckNFTRequest struct {
 	Address string `json:"address"`
+	CommissionRate string `json:"commission_rate"`
 }
 
 type CheckNFTResponse struct {
@@ -20,16 +22,26 @@ type CheckNFTResponse struct {
 	Message string `json:"message"`
 }
 
-func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int) error {
+func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int, commissionRate string) error {
 	exists, err := db.ClientExists(address)
 	if err != nil {
 		return err
 	}
 
-	runtime := 0
-	delegationTime := 0
-	totalTime := 0
+	// convert commission rate to float64
+	commissionRateFloat, err := strconv.ParseFloat(commissionRate, 64)
+	if err != nil {
+		return err
+	}
 
+	totalTime := 0
+	operationPoints := database.OperationPointRecord{
+		Amount:         totalAmount,
+		Timestamp:     time.Now(),
+		CommissionRate: commissionRateFloat,
+		Time:           0,
+	}
+	
 	if exists {
 		client, err := db.GetClient(address)
 		if err != nil {
@@ -37,43 +49,31 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 		
 		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
-			runtime = int(client.Runtime) + int(totalAmount) * int(time.Since(client.LastHeartbeat).Seconds())
 			totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
+			// update Time of the operationPoints
+			operationPoints.Time = int64(time.Since(client.LastHeartbeat).Seconds())
 		} else {
-			runtime = int(client.Runtime)
 			totalTime = int(client.TotalTime)
 		}
 	}
 
-	return db.RegisterClient(address, int64(runtime), int64(delegationTime), int64(totalTime))
+	return db.RegisterClient(address, operationPoints, database.DelegationPointRecord{}, int64(totalTime))
 }
 
-func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int) error {
-	exists, err := db.ClientExists(address)
+func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, delegationAddress string, commissionRate string) error {
+	// convert commission rate to float64
+	commissionRateFloat, err := strconv.ParseFloat(commissionRate, 64)
 	if err != nil {
 		return err
 	}
 
-	runtime := 0
-	delegationTime := 0
-	totalTime := 0
-
-	if exists {
-		client, err := db.GetClient(address)
-		if err != nil {
-			return err
-		}
-		
-		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
-			delegationTime = int(client.DelegationTime) + int(totalAmount) * int(time.Since(client.LastHeartbeat).Seconds())
-			totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
-		} else {
-			delegationTime = int(client.DelegationTime)
-			totalTime = int(client.TotalTime)
-		}
+	delegationPoints := database.DelegationPointRecord{
+		Address: 		delegationAddress,
+		Amount:         totalAmount,
+		Timestamp:     	time.Now(),
+		CommissionRate: commissionRateFloat,
 	}
-
-	return db.RegisterClient(address, int64(runtime), int64(delegationTime), int64(totalTime))
+	return db.RegisterClient(address, database.OperationPointRecord{}, delegationPoints, 0)
 }
 
 func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
@@ -103,6 +103,14 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			return
 		}
 
+		if req.CommissionRate == "" {
+			response.Status = "error"
+			response.Message = "Commission rate is required"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
 		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -121,37 +129,28 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			for _, delegation := range incommingDelegation {
 				delegationRights := [32]byte(delegation.Rights)
 				configRights := [32]byte(cfg.Rights)
-				if delegationRights == configRights && delegation.Contract == common.HexToAddress(cfg.NFTContractAddr) {
+				if delegationRights == configRights && delegation.Contract == common.HexToAddress(cfg.NFTContractAddr) && delegation.Type == 5 {
 					delegations = append(delegations, delegation)
 				}
 			}
 
 			// get map From address to token id and amount
-			tokenIdMap := make(map[string]struct {
-				TokenId string
-				Amount  int64
-			})
+			tokenIdMap := make(map[string]int64)
 			for _, delegation := range delegations {
-				tokenIdMap[delegation.From.String()] = struct {
-					TokenId string
-					Amount  int64
-				}{
-					TokenId: delegation.TokenId.String(),
-					Amount:  delegation.Amount.Int64(),
-				}
+				tokenIdMap[delegation.From.String()] = tokenIdMap[delegation.From.String()] + delegation.Amount.Int64()
 			}
 			
 			// sum up all the amounts
 			var totalAmount int64
 			for _, amount := range tokenIdMap {
-				totalAmount += amount.Amount
+				totalAmount += amount
 			}
 
 			if totalAmount > 0 {
 				response.Status = "success"
 				response.Message = "Address has NFT or delegation for required NFT"
 
-				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval); err != nil {
+				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
 					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 					return
 				}
@@ -159,7 +158,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				// update delegation client registration
 				for key, amount := range tokenIdMap {
 					if key == req.Address { continue; }
-					if err := updateDelegationClientRegistration(db, key, amount.Amount, cfg.CheckNFTInterval); err != nil {
+					if err := updateDelegationClientRegistration(db, key, amount, req.Address, req.CommissionRate); err != nil {
 						http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 						return
 					}

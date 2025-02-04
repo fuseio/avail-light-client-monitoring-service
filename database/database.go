@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -25,14 +26,28 @@ type Database struct {
 	logger     *log.Logger
 }
 
-// Add this struct after the Database struct
+type OperationPointRecord struct {
+	Amount         int64     `bson:"amount"`
+	Timestamp     time.Time  `bson:"timestamp"`
+	CommissionRate float64   `bson:"commission_rate"`
+	Time           int64     `bson:"time"`
+}
+
+type DelegationPointRecord struct {
+	Address        string    `bson:"address"`
+	Amount         int64     `bson:"amount"`
+	Timestamp     time.Time  `bson:"timestamp"`
+	CommissionRate float64   `bson:"commission_rate"`
+	Time           int64     `bson:"time"`
+}
+
 type ClientInfo struct {
-	Address         string          `bson:"address"`
-	Runtime         int64 	       	`bson:"runtime"`
-	DelegationTime  int64       	`bson:"delegation_time"`
-	TotalTime       int64       	`bson:"total_time"`
-	LastHeartbeat   time.Time       `bson:"last_heartbeat"`
-	CreatedAt       time.Time       `bson:"created_at"`
+	Address          string        `bson:"address"`
+	OperationPoints  []OperationPointRecord `bson:"operation_points"`
+	DelegationPoints []DelegationPointRecord `bson:"delegation_points"`
+	TotalTime        int64         `bson:"total_time"`
+	LastHeartbeat    time.Time     `bson:"last_heartbeat"`
+	CreatedAt        time.Time     `bson:"created_at"`
 }
 
 func NewDatabase(mongoURI, dbName string, logger *log.Logger) (*Database, error) {
@@ -74,7 +89,7 @@ func (d *Database) Close() error {
 	return d.client.Disconnect(ctx)
 }
 
-func (d *Database) RegisterClient(address string, runtime int64, delegationTime int64, totalTime int64) error {
+func (d *Database) RegisterClient(address string, operationPoints OperationPointRecord, delegationPoints DelegationPointRecord, totalTime int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -84,14 +99,26 @@ func (d *Database) RegisterClient(address string, runtime int64, delegationTime 
 	update := bson.M{
 		"$set": bson.M{
 			"address":         address,
-			"runtime":         runtime,
-			"delegation_time": delegationTime,
-			"total_time":     totalTime,
-			"last_heartbeat": now,
 		},
 		"$setOnInsert": bson.M{
 			"created_at": now,
 		},
+	}
+	// check if operationPoints is not empty
+	if operationPoints.Amount > 0 {
+		update["$set"] = bson.M{
+			"total_time":     totalTime,
+			"last_heartbeat": now,
+		}
+		update["$push"] = bson.M{
+			"operation_points": operationPoints,
+		}
+	}
+	// check if delegationPoints is not empty
+	if delegationPoints.Amount > 0 {
+		update["$push"] = bson.M{
+			"delegation_points": delegationPoints,
+		}
 	}
 
 	opts := options.Update().SetUpsert(true)
@@ -119,8 +146,8 @@ func (d *Database) GetClient(address string) (ClientInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var client ClientInfo
-	err := d.collection.FindOne(ctx, bson.M{"address": address}).Decode(&client)
+	var raw bson.M
+	err := d.collection.FindOne(ctx, bson.M{"address": address}).Decode(&raw)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return ClientInfo{}, nil
@@ -128,6 +155,61 @@ func (d *Database) GetClient(address string) (ClientInfo, error) {
 		d.logger.Printf("Error getting client: %v", err)
 		return ClientInfo{}, err
 	}
+
+	client := ClientInfo{
+		Address: raw["address"].(string),
+	}
+
+	// Handle optional fields with proper type conversion
+	if raw["last_heartbeat"] != nil {
+		if timestamp, ok := raw["last_heartbeat"].(primitive.DateTime); ok {
+			client.LastHeartbeat = timestamp.Time()
+		}
+	}
+	if raw["created_at"] != nil {
+		if timestamp, ok := raw["created_at"].(primitive.DateTime); ok {
+			client.CreatedAt = timestamp.Time()
+		}
+	}
+	if raw["total_time"] != nil {
+		client.TotalTime = raw["total_time"].(int64)
+	}
+
+	// Handle operation points array
+	if opPoints, ok := raw["operation_points"].(primitive.A); ok {
+		client.OperationPoints = make([]OperationPointRecord, 0, len(opPoints))
+		for _, point := range opPoints {
+			if pointMap, ok := point.(bson.M); ok {
+				timestamp := pointMap["timestamp"].(primitive.DateTime).Time()
+				record := OperationPointRecord{
+					Amount:         pointMap["amount"].(int64),
+					Timestamp:      timestamp,
+					CommissionRate: pointMap["commission_rate"].(float64),
+					Time:           pointMap["time"].(int64),
+				}
+				client.OperationPoints = append(client.OperationPoints, record)
+			}
+		}
+	}
+
+	// Handle delegation points array
+	if delPoints, ok := raw["delegation_points"].(primitive.A); ok {
+		client.DelegationPoints = make([]DelegationPointRecord, 0, len(delPoints))
+		for _, point := range delPoints {
+			if pointMap, ok := point.(bson.M); ok {
+				timestamp := pointMap["timestamp"].(primitive.DateTime).Time()
+				record := DelegationPointRecord{
+					Address:        pointMap["address"].(string),
+					Amount:         pointMap["amount"].(int64),
+					Timestamp:      timestamp,
+					CommissionRate: pointMap["commission_rate"].(float64),
+					Time:           pointMap["time"].(int64),
+				}
+				client.DelegationPoints = append(client.DelegationPoints, record)
+			}
+		}
+	}
+
 	return client, nil
 }
 
