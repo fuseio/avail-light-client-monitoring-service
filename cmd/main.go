@@ -111,6 +111,9 @@ func setupRouter(db *database.Database, nftChecker *nft.NFTChecker, delegateRegi
 	// Get all clients endpoint
 	mux.HandleFunc("/clients", logRequest(handlers.GetClients(db)))
 
+	// Get a client endpoint
+	mux.HandleFunc("/client/", logRequest(handlers.GetClient(db)))
+
 	return mux
 }
 
