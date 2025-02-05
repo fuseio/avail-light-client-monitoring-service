@@ -22,16 +22,16 @@ type CheckNFTResponse struct {
 	Message string `json:"message"`
 }
 
-func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int, commissionRate string) error {
+func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int, commissionRate string) (int64, error) {
 	exists, err := db.ClientExists(address)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// convert commission rate to float64
 	commissionRateFloat, err := strconv.ParseFloat(commissionRate, 64)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	totalTime := 0
@@ -45,7 +45,7 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 	if exists {
 		client, err := db.GetClient(address)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		
 		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
@@ -57,10 +57,12 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 	}
 
-	return db.RegisterClient(address, operationPoints, database.DelegationPointRecord{}, int64(totalTime))
+	db.RegisterClient(address, operationPoints, database.DelegationPointRecord{}, int64(totalTime))
+
+	return operationPoints.Time, nil
 }
 
-func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, delegationAddress string, commissionRate string) error {
+func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, delegationAddress string, commissionRate string, operationTime int64) error {
 	// convert commission rate to float64
 	commissionRateFloat, err := strconv.ParseFloat(commissionRate, 64)
 	if err != nil {
@@ -72,6 +74,7 @@ func updateDelegationClientRegistration(db *database.Database, address string, t
 		Amount:         totalAmount,
 		Timestamp:     	time.Now(),
 		CommissionRate: commissionRateFloat,
+		Time:           operationTime,
 	}
 	return db.RegisterClient(address, database.OperationPointRecord{}, delegationPoints, 0)
 }
@@ -150,7 +153,8 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				response.Status = "success"
 				response.Message = "Address has NFT or delegation for required NFT"
 
-				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
+				operationTime, err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate)
+				if err != nil {
 					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 					return
 				}
@@ -158,7 +162,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				// update delegation client registration
 				for key, amount := range tokenIdMap {
 					if key == req.Address { continue; }
-					if err := updateDelegationClientRegistration(db, key, amount, req.Address, req.CommissionRate); err != nil {
+					if err := updateDelegationClientRegistration(db, key, amount, req.Address, req.CommissionRate, operationTime); err != nil {
 						http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 						return
 					}

@@ -213,7 +213,6 @@ func (d *Database) GetClient(address string) (ClientInfo, error) {
 	return client, nil
 }
 
-// Add this new function at the end of the file
 func (d *Database) GetAllClients() ([]ClientInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -226,10 +225,69 @@ func (d *Database) GetAllClients() ([]ClientInfo, error) {
 	}
 	defer cursor.Close(ctx)
 
-	var clients []ClientInfo
-	if err = cursor.All(ctx, &clients); err != nil {
+	var results []bson.M
+	if err = cursor.All(ctx, &results); err != nil {
 		d.logger.Printf("Error decoding clients: %v", err)
 		return nil, err
+	}
+
+	clients := make([]ClientInfo, 0, len(results))
+	for _, raw := range results {
+		client := ClientInfo{
+			Address: raw["address"].(string),
+		}
+
+		// Handle optional fields with proper type conversion
+		if raw["last_heartbeat"] != nil {
+			if timestamp, ok := raw["last_heartbeat"].(primitive.DateTime); ok {
+				client.LastHeartbeat = timestamp.Time()
+			}
+		}
+		if raw["created_at"] != nil {
+			if timestamp, ok := raw["created_at"].(primitive.DateTime); ok {
+				client.CreatedAt = timestamp.Time()
+			}
+		}
+		if raw["total_time"] != nil {
+			client.TotalTime = raw["total_time"].(int64)
+		}
+
+		// Handle operation points array
+		if opPoints, ok := raw["operation_points"].(primitive.A); ok {
+			client.OperationPoints = make([]OperationPointRecord, 0, len(opPoints))
+			for _, point := range opPoints {
+				if pointMap, ok := point.(bson.M); ok {
+					timestamp := pointMap["timestamp"].(primitive.DateTime).Time()
+					record := OperationPointRecord{
+						Amount:         pointMap["amount"].(int64),
+						Timestamp:      timestamp,
+						CommissionRate: pointMap["commission_rate"].(float64),
+						Time:           pointMap["time"].(int64),
+					}
+					client.OperationPoints = append(client.OperationPoints, record)
+				}
+			}
+		}
+
+		// Handle delegation points array
+		if delPoints, ok := raw["delegation_points"].(primitive.A); ok {
+			client.DelegationPoints = make([]DelegationPointRecord, 0, len(delPoints))
+			for _, point := range delPoints {
+				if pointMap, ok := point.(bson.M); ok {
+					timestamp := pointMap["timestamp"].(primitive.DateTime).Time()
+					record := DelegationPointRecord{
+						Address:        pointMap["address"].(string),
+						Amount:         pointMap["amount"].(int64),
+						Timestamp:      timestamp,
+						CommissionRate: pointMap["commission_rate"].(float64),
+						Time:           pointMap["time"].(int64),
+					}
+					client.DelegationPoints = append(client.DelegationPoints, record)
+				}
+			}
+		}
+
+		clients = append(clients, client)
 	}
 
 	return clients, nil
