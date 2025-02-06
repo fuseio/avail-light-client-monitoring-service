@@ -57,7 +57,7 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 	}
 
-	return db.RegisterClient(address, operationPoints, database.DelegationPointRecord{}, int64(totalTime))
+	return db.RegisterClient(address, operationPoints, nil, int64(totalTime))
 }
 
 func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, delegationAddress string, commissionRate string) error {
@@ -67,13 +67,27 @@ func updateDelegationClientRegistration(db *database.Database, address string, t
 		return err
 	}
 
-	delegationPoints := database.DelegationPointRecord{
-		Address: 		delegationAddress,
+	exists, err := db.ClientExists(address)
+	if err != nil {
+		return err
+	}
+
+	totalTime := int64(0)
+	if exists {
+		client, err := db.GetClient(address)
+		if err != nil {
+			return err
+		}
+		totalTime = client.TotalTime
+	}
+
+	delegationPoints := &database.DelegationPointRecord{
+		Address:        delegationAddress,
 		Amount:         totalAmount,
-		Timestamp:     	time.Now(),
+		Timestamp:      time.Now(),
 		CommissionRate: commissionRateFloat,
 	}
-	return db.RegisterClient(address, database.OperationPointRecord{}, delegationPoints, 0)
+	return db.RegisterClient(address, database.OperationPointRecord{}, delegationPoints, totalTime)
 }
 
 func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
