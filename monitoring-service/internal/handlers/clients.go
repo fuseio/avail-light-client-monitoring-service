@@ -1,9 +1,10 @@
 package handlers
 
 import (
-	"avail-light-client-monitoring-service/database"
 	"encoding/json"
 	"net/http"
+
+	"monitoring-service/internal/database"
 )
 
 type GetClientsResponse struct {

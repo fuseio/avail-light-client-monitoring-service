@@ -1,13 +1,14 @@
 package handlers
 
 import (
-	"avail-light-client-monitoring-service/blockchain/delegation"
-	"avail-light-client-monitoring-service/config"
-	"avail-light-client-monitoring-service/database"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
+
+	"monitoring-service/internal/blockchain/delegation"
+	"monitoring-service/internal/database"
+	"monitoring-service/pkg/config"
 
 	"github.com/ethereum/go-ethereum/common"
 )

@@ -12,11 +12,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	"avail-light-client-monitoring-service/blockchain/delegation"
-	"avail-light-client-monitoring-service/blockchain/nft"
-	"avail-light-client-monitoring-service/config"
-	"avail-light-client-monitoring-service/database"
-	"avail-light-client-monitoring-service/handlers"
+	"monitoring-service/internal/blockchain/delegation"
+	"monitoring-service/internal/blockchain/nft"
+	"monitoring-service/internal/database"
+	"monitoring-service/internal/handlers"
+	"monitoring-service/pkg/config"
 )
 
 func main() {
