@@ -93,9 +93,9 @@ volumeMounts: []
 configMap:
   port: ":8080"
   rpc_url: "https://rpc.fuse.io"
-  nft_contract_address: "0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997"
+  nft_contract_address: "0xB42F66f690816D2B076D26B20697Aa594dc1Fd2f"
   delegate_contract_address: "0xf9689022f129aeb4495f6c33bacf4bcaba1f8fca"
-  rights: "0x4675736520416d62657220546573746e6574204c6963656e7365000000000000"
+  rights: "0x4675736520456d626572204e6f6465204c6963656e7365000000000000000000"
   check_nft_interval: "6"
 
 nodeSelector: {}
