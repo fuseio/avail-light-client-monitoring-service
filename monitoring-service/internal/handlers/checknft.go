@@ -182,6 +182,9 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				response.Status = "error"
 				response.Message = "Address does not own or have delegation for required NFT"
 			}
+		} else {
+			response.Status = "error"
+			response.Message = "Address does not have any incoming delegations"
 		}
 
 		w.Header().Set("Content-Type", "application/json")
