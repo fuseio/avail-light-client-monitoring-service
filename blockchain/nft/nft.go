@@ -1,4 +1,4 @@
-package blockchain
+package nft
 
 import (
 	"context"

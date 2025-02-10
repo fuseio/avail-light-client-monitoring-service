@@ -1,7 +1,8 @@
 package handlers
 
 import (
-	"avail-light-client-monitoring-service/blockchain"
+	"avail-light-client-monitoring-service/blockchain/delegation"
+	"avail-light-client-monitoring-service/blockchain/nft"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -27,7 +28,7 @@ type CheckDelegationResponse struct {
 	} `json:"details"`
 }
 
-func CheckDelegation(nftChecker *blockchain.NFTChecker, delegateRegistry *blockchain.DelegationRegistry) http.HandlerFunc {
+func CheckDelegation(nftChecker *nft.NFTChecker, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -76,7 +77,7 @@ func CheckDelegation(nftChecker *blockchain.NFTChecker, delegateRegistry *blockc
 		var rights [32]byte // Zero rights for basic delegation check
 
 		// Check ERC1155 delegation amount
-		amount, err := delegateRegistry.CheckDelegateForERC1155(checksumAddr, ownerAddr, contractAddr, tokenID, rights)
+		amount, err := delegateRegistry.CheckDelegateForERC1155(nil, checksumAddr, ownerAddr, contractAddr, tokenID, rights)
 		if err != nil {
 			fmt.Printf("Error checking ERC1155 delegation: %v\n", err)
 		} else if amount != nil {

@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   app:
@@ -12,6 +12,8 @@ services:
       - RPC_URL=https://rpc.fuse.io
       - NFT_CONTRACT_ADDRESS=0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997
       - DELEGATE_CONTRACT_ADDRESS=0xf8820d0bB4714aCc91aF7db8c67a967CA5fF3f74
+      - RIGHTS=0x69706c6963656e73650000000000000000000000000000000000000000000000
+      - CHECK_NFT_INTERVAL=6
     depends_on:
       - mongo
     restart: unless-stopped
