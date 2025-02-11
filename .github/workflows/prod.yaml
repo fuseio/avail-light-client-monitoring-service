@@ -40,7 +40,7 @@ jobs:
           docker build \
             -t ${{ env.OVH_PRIVATE_REGISTRY_ENDPOINT }}/${{ env.OVH_PRIVATE_REGISTRY_REPOSITORY }}/avail-light-client-monitoring-service:latest \
             -t ${{ env.OVH_PRIVATE_REGISTRY_ENDPOINT }}/${{ env.OVH_PRIVATE_REGISTRY_REPOSITORY }}/avail-light-client-monitoring-service:${{ env.SHORT_SHA }} \
-            .
+            -f ./monitoring-service/Dockerfile ./monitoring-service
 
       - name: Push Docker image(s)
         run: |
