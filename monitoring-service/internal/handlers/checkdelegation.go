@@ -1,12 +1,13 @@
 package handlers
 
 import (
-	"avail-light-client-monitoring-service/blockchain/delegation"
-	"avail-light-client-monitoring-service/blockchain/nft"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/http"
+
+	"monitoring-service/internal/blockchain/delegation"
+	"monitoring-service/internal/blockchain/nft"
 
 	"github.com/ethereum/go-ethereum/common"
 )

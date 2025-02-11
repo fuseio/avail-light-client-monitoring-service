@@ -1,13 +1,14 @@
 package handlers
 
 import (
-	"avail-light-client-monitoring-service/blockchain/delegation"
-	"avail-light-client-monitoring-service/config"
-	"avail-light-client-monitoring-service/database"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
+
+	"monitoring-service/internal/blockchain/delegation"
+	"monitoring-service/internal/database"
+	"monitoring-service/pkg/config"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -48,16 +49,16 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 			return err
 		}
 		
+		totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
 		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
-			totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
 			// update Time of the operationPoints
 			operationPoints.Time = int64(time.Since(client.LastHeartbeat).Seconds())
 		} else {
-			totalTime = int(client.TotalTime)
+			operationPoints.Time = int64(0)
 		}
 	}
 
-	return db.RegisterClient(address, operationPoints, nil, int64(totalTime))
+	return db.RegisterClient(address, operationPoints, int64(totalTime))
 }
 
 func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, delegationAddress string, commissionRate string) error {
@@ -67,27 +68,13 @@ func updateDelegationClientRegistration(db *database.Database, address string, t
 		return err
 	}
 
-	exists, err := db.ClientExists(address)
-	if err != nil {
-		return err
-	}
-
-	totalTime := int64(0)
-	if exists {
-		client, err := db.GetClient(address)
-		if err != nil {
-			return err
-		}
-		totalTime = client.TotalTime
-	}
-
-	delegationPoints := &database.DelegationPointRecord{
+	delegationPoints := database.DelegationPointRecord{
 		Address:        delegationAddress,
 		Amount:         totalAmount,
 		Timestamp:      time.Now(),
 		CommissionRate: commissionRateFloat,
 	}
-	return db.RegisterClient(address, database.OperationPointRecord{}, delegationPoints, totalTime)
+	return db.RegisterDelegation(address, delegationPoints)
 }
 
 func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
@@ -171,7 +158,6 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 
 				// update delegation client registration
 				for key, amount := range tokenIdMap {
-					if key == req.Address { continue; }
 					if err := updateDelegationClientRegistration(db, key, amount, req.Address, req.CommissionRate); err != nil {
 						http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 						return
@@ -181,6 +167,9 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				response.Status = "error"
 				response.Message = "Address does not own or have delegation for required NFT"
 			}
+		} else {
+			response.Status = "error"
+			response.Message = "Address does not have any incoming delegations"
 		}
 
 		w.Header().Set("Content-Type", "application/json")

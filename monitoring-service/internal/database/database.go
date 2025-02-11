@@ -49,6 +49,9 @@ type ClientInfo struct {
 	CreatedAt      time.Time `bson:"created_at"`
 	NFTAmount      int64     `bson:"nft_amount"`
 	CommissionRate float64   `bson:"commission_rate"`
+	Status         string    `bson:"status"`
+	AllUptimePercentage float64 `bson:"all_uptime_percentage"`
+	WeeklyUptimePercentage float64 `bson:"weekly_uptime_percentage"`
 }
 
 type HeartbeatRecord struct {
@@ -120,15 +123,15 @@ func (d *Database) Close() error {
 	return d.client.Disconnect(ctx)
 }
 
-func (d *Database) RegisterClient(address string, operationPoints OperationPointRecord, delegationPoints *DelegationPointRecord, totalTime int64) error {
+func (d *Database) RegisterClient(address string, operationPoints OperationPointRecord, totalTime int64) error {
 	ctx := context.Background()
 	now := time.Now()
 
-	// Update client info
+	// Prepare base client update
 	clientUpdate := bson.M{
 		"$set": bson.M{
-			"address": address,
-			"total_time": totalTime,
+			"address":        address,
+			"total_time":     totalTime,
 			"last_heartbeat": now,
 		},
 		"$setOnInsert": bson.M{
@@ -136,10 +139,11 @@ func (d *Database) RegisterClient(address string, operationPoints OperationPoint
 		},
 	}
 
-	// Add operation-specific fields if present
+	// Skip operation points processing if amount is 0
 	if operationPoints.Amount > 0 {
-		clientUpdate["$set"].(bson.M)["nft_amount"] = operationPoints.Amount
-		clientUpdate["$set"].(bson.M)["commission_rate"] = operationPoints.CommissionRate
+		setFields := clientUpdate["$set"].(bson.M)
+		setFields["nft_amount"] = operationPoints.Amount
+		setFields["commission_rate"] = operationPoints.CommissionRate
 
 		// Record heartbeat if time > 0
 		if operationPoints.Time > 0 {
@@ -155,39 +159,42 @@ func (d *Database) RegisterClient(address string, operationPoints OperationPoint
 		}
 	}
 
-	// Record delegation ONLY if delegation record is provided
-	if delegationPoints != nil {
-		delegation := DelegationRecord{
-			FromAddress:    delegationPoints.Address,
-			ToAddress:      address,
-			Amount:         delegationPoints.Amount,
-			CommissionRate: delegationPoints.CommissionRate,
-			Timestamp:      now,
-		}
-		
-		filter := bson.M{
-			"from_address": delegationPoints.Address,
-			"to_address":   address,
-		}
-		update := bson.M{"$set": delegation}
-		
-		_, err := d.delegations.UpdateOne(
-			ctx,
-			filter,
-			update,
-			options.Update().SetUpsert(true),
-		)
-		if err != nil {
-			return err
-		}
-	}
-
+	// Update client document
 	_, err := d.clients.UpdateOne(
 		ctx,
 		bson.M{"address": address},
 		clientUpdate,
 		options.Update().SetUpsert(true),
 	)
+
+	return err
+}
+
+func (d *Database) RegisterDelegation(address string, delegationPoints DelegationPointRecord) error {
+	ctx := context.Background()
+	now := time.Now()
+
+	delegation := DelegationRecord{
+		FromAddress:    delegationPoints.Address,
+		ToAddress:      address,
+		Amount:         delegationPoints.Amount,
+		CommissionRate: delegationPoints.CommissionRate,
+		Timestamp:      now,
+	}
+		
+	filter := bson.M{
+		"from_address": delegationPoints.Address,
+		"to_address":   address,
+	}
+	update := bson.M{"$set": delegation}
+	
+	_, err := d.delegations.UpdateOne(
+		ctx,
+		filter,
+		update,
+		options.Update().SetUpsert(true),
+	)
+
 	return err
 }
 
@@ -236,6 +243,95 @@ func (d *Database) GetAllClients() ([]ClientInfo, error) {
 	if err = cursor.All(ctx, &clients); err != nil {
 		d.logger.Printf("Error decoding clients: %v", err)
 		return nil, err
+	}
+
+	// get all uptime percentage, weekly uptime percentage, status for each client
+	for i, client := range clients {
+		// Calculate all-time uptime percentage
+		pipeline := mongo.Pipeline{
+			bson.D{{Key: "$match", Value: bson.D{{Key: "client_address", Value: client.Address}}}},
+			bson.D{{Key: "$group", Value: bson.D{
+				{Key: "_id", Value: "$client_address"},
+				{Key: "total_duration", Value: bson.D{{Key: "$sum", Value: "$duration"}}},
+			}}},
+		}
+
+		cursor, err := d.heartbeats.Aggregate(ctx, pipeline)
+		if err != nil {
+			d.logger.Printf("Error getting sum of heartbeats duration: %v", err)
+			return nil, err
+		}
+		defer cursor.Close(ctx)
+
+		var result struct {
+			ID            string `bson:"_id"`
+			TotalDuration int64  `bson:"total_duration"`
+		}
+		totalDuration := int64(0)
+		if cursor.Next(ctx) {
+			if err := cursor.Decode(&result); err != nil {
+				d.logger.Printf("Error decoding result: %v", err)
+				return nil, err
+			}
+			totalDuration = result.TotalDuration
+		}
+
+		// Set all-time uptime percentage
+		allTotalDuration := int64(time.Since(client.CreatedAt) / time.Second)
+		if allTotalDuration > 0 {
+			clients[i].AllUptimePercentage = float64(totalDuration) / float64(allTotalDuration) * 100
+		} else {
+			clients[i].AllUptimePercentage = 0
+		}
+
+		// Calculate weekly uptime percentage
+		weeklyPipeline := mongo.Pipeline{
+			bson.D{{Key: "$match", Value: bson.D{
+				{Key: "client_address", Value: client.Address},
+				{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: time.Now().Add(-7 * 24 * time.Hour)}}},
+			}}},
+			bson.D{{Key: "$group", Value: bson.D{
+				{Key: "_id", Value: "$client_address"},
+				{Key: "total_duration", Value: bson.D{{Key: "$sum", Value: "$duration"}}},
+			}}},
+		}
+
+		cursor, err = d.heartbeats.Aggregate(ctx, weeklyPipeline)
+		if err != nil {
+			d.logger.Printf("Error getting weekly heartbeats duration: %v", err)
+			return nil, err
+		}
+		defer cursor.Close(ctx)
+
+		var weeklyResult struct {
+			ID            string `bson:"_id"`
+			TotalDuration int64  `bson:"total_duration"`
+		}
+		weeklyDuration := int64(0)
+		if cursor.Next(ctx) {
+			if err := cursor.Decode(&weeklyResult); err != nil {
+				d.logger.Printf("Error decoding weekly result: %v", err)
+				return nil, err
+			}
+			weeklyDuration = weeklyResult.TotalDuration
+		}
+
+		// Set weekly uptime percentage
+		weeklyTotalDuration := float64(min(7 * 24 * 3600, int64(time.Since(client.CreatedAt) / time.Second)))
+		if weeklyDuration > 0 {
+			clients[i].WeeklyUptimePercentage = float64(weeklyDuration) / weeklyTotalDuration * 100
+		} else {
+			clients[i].WeeklyUptimePercentage = 0
+		}
+
+		// Set status
+		if time.Since(client.LastHeartbeat) > 10 * time.Minute {
+			clients[i].Status = "Offline"
+		} else if time.Since(client.LastHeartbeat) > 5 * time.Minute {
+			clients[i].Status = "Inactive"
+		} else {
+			clients[i].Status = "Active"
+		}
 	}
 
 	return clients, nil

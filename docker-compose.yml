@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   app:
-    build: .
+    build: ./monitoring-service
     ports:
       - "8080:8080"
     environment:
@@ -11,8 +11,8 @@ services:
       - PORT=:8080
       - RPC_URL=https://rpc.fuse.io
       - NFT_CONTRACT_ADDRESS=0x9Dbe0138C9b547c9467b5a4Ca6b566D1F6A8B997
-      - DELEGATE_CONTRACT_ADDRESS=0xf8820d0bB4714aCc91aF7db8c67a967CA5fF3f74
-      - RIGHTS=0x69706c6963656e73650000000000000000000000000000000000000000000000
+      - DELEGATE_CONTRACT_ADDRESS=0xf9689022f129aeb4495f6c33bacf4bcaba1f8fca
+      - RIGHTS=0x4675736520416d62657220546573746e6574204c6963656e7365000000000000
       - CHECK_NFT_INTERVAL=6
     depends_on:
       - mongo
