@@ -385,3 +385,23 @@ func (d *Database) GetClientWithHistory(address string) (*ClientInfo, []Heartbea
 
 	return client, heartbeats, delegations, nil
 }
+
+func (d *Database) GetFromDelegationsByAddress(address string) ([]DelegationRecord, error) {
+	ctx := context.Background()
+
+	// Query for delegations where the address is the 'from' address
+	cursor, err := d.delegations.Find(ctx, bson.M{
+		"from_address": address,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var delegations []DelegationRecord
+	if err = cursor.All(ctx, &delegations); err != nil {
+		return nil, err
+	}
+
+	return delegations, nil
+}

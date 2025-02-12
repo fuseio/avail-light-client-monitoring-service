@@ -89,6 +89,7 @@ func setupRouter(db *database.Database, nftChecker *nft.NFTChecker, delegateRegi
 
 	// Add health check endpoint
 	mux.HandleFunc("/health", logRequest(handlers.HealthCheck))
+	mux.HandleFunc("/delegations", logRequest(handlers.GetDelegations(db)))
 
 	// NFT check endpoint
 	mux.HandleFunc("/check-nft", logRequest(func(w http.ResponseWriter, r *http.Request) {
