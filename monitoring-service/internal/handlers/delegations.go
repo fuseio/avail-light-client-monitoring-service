@@ -29,19 +29,16 @@ func GetDelegations(db *database.Database) http.HandlerFunc {
 			return
 		}
 
-		// Fetch delegations made by the specified address
 		delegations, err := db.GetFromDelegationsByAddress(address)
 		if err != nil {
 			http.Error(w, "Failed to fetch delegations", http.StatusInternalServerError)
 			return
 		}
 
-		// Prepare the response
 		var clientsWithDelegations []ClientWithDelegations
-		clientDelegationMap := make(map[string]int64) // To accumulate delegated amounts
+		clientDelegationMap := make(map[string]int64) 
 
 		for _, delegation := range delegations {
-			// Fetch the client who received the delegation
 			clientAddress := delegation.ToAddress
 			client, err := db.GetClient(clientAddress)
 			if err != nil {
@@ -49,14 +46,11 @@ func GetDelegations(db *database.Database) http.HandlerFunc {
 				return
 			}
 
-			// Only include clients that are running the node
 			if client != nil {
-				// Accumulate the delegated amount for each client
 				clientDelegationMap[clientAddress] += delegation.Amount
 			}
 		}
 
-		// Now update the NFTAmount for each client based on accumulated amounts
 		for clientAddress, totalDelegatedAmount := range clientDelegationMap {
 			client, err := db.GetClient(clientAddress)
 			if err != nil {
@@ -65,8 +59,7 @@ func GetDelegations(db *database.Database) http.HandlerFunc {
 			}
 
 			if client != nil {
-				// Set the NFTAmount to the total delegated amount
-				client.NFTAmount = totalDelegatedAmount // Set NFTAmount directly
+				client.NFTAmount = totalDelegatedAmount
 				clientsWithDelegations = append(clientsWithDelegations, ClientWithDelegations{
 					ClientInfo: client,
 				})
