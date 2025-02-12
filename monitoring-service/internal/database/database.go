@@ -279,7 +279,7 @@ func (d *Database) GetAllClients() ([]ClientInfo, error) {
 		// Set all-time uptime percentage
 		allTotalDuration := int64(time.Since(client.CreatedAt) / time.Second)
 		if allTotalDuration > 0 {
-			clients[i].AllUptimePercentage = float64(totalDuration) / float64(allTotalDuration) * 100
+			clients[i].AllUptimePercentage = min(float64(totalDuration) / float64(allTotalDuration) * 100, 100)
 		} else {
 			clients[i].AllUptimePercentage = 0
 		}
@@ -319,7 +319,7 @@ func (d *Database) GetAllClients() ([]ClientInfo, error) {
 		// Set weekly uptime percentage
 		weeklyTotalDuration := float64(min(7 * 24 * 3600, int64(time.Since(client.CreatedAt) / time.Second)))
 		if weeklyDuration > 0 {
-			clients[i].WeeklyUptimePercentage = float64(weeklyDuration) / weeklyTotalDuration * 100
+			clients[i].WeeklyUptimePercentage = min(float64(weeklyDuration) / weeklyTotalDuration * 100, 100)
 		} else {
 			clients[i].WeeklyUptimePercentage = 0
 		}
