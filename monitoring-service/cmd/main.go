@@ -89,7 +89,12 @@ func setupRouter(db *database.Database, nftChecker *nft.NFTChecker, delegateRegi
 
 	// Add health check endpoint
 	mux.HandleFunc("/health", logRequest(handlers.HealthCheck))
-	mux.HandleFunc("/delegations", logRequest(handlers.GetDelegations(db)))
+	
+	// Wrap delegations endpoint with CORS
+	mux.Handle("/delegations", enableCors(logRequest(handlers.GetDelegations(db))))
+	
+	// Wrap clients endpoint with CORS
+	mux.Handle("/clients", enableCors(logRequest(handlers.GetClients(db))))
 
 	// NFT check endpoint
 	mux.HandleFunc("/check-nft", logRequest(func(w http.ResponseWriter, r *http.Request) {
@@ -108,9 +113,6 @@ func setupRouter(db *database.Database, nftChecker *nft.NFTChecker, delegateRegi
 		}
 		handlers.CheckDelegation(nftChecker, delegateRegistry)(w, r)
 	}))
-
-	// Get all clients endpoint
-	mux.HandleFunc("/clients", logRequest(handlers.GetClients(db)))
 
 	return mux
 }
@@ -150,4 +152,19 @@ func newLoggingResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
 func (lrw *loggingResponseWriter) WriteHeader(code int) {
 	lrw.statusCode = code
 	lrw.ResponseWriter.WriteHeader(code)
+}
+
+func enableCors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
