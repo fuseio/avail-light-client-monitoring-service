@@ -32,8 +32,8 @@ var (
 // IDelegateRegistryDelegation is an auto generated low-level Go binding around an user-defined struct.
 type IDelegateRegistryDelegation struct {
 	Type     uint8
-	To       common.Address
-	From     common.Address
+	From     common.Address  
+	To       common.Address 
 	Rights   [32]byte
 	Contract common.Address
 	TokenId  *big.Int
