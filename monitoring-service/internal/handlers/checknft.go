@@ -138,7 +138,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			// get map From address to token id and amount
 			tokenIdMap := make(map[string]int64)
 			for _, delegation := range delegations {
-				tokenIdMap[delegation.From.String()] = tokenIdMap[delegation.From.String()] + delegation.Amount.Int64()
+				tokenIdMap[delegation.To.String()] = tokenIdMap[delegation.To.String()] + delegation.Amount.Int64()
 			}
 			
 			// sum up all the amounts
@@ -158,7 +158,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 
 				// update delegation client registration
 				for key, amount := range tokenIdMap {
-					if err := updateDelegationClientRegistration(db, key, amount, req.Address, req.CommissionRate); err != nil {
+					if err := updateDelegationClientRegistration(db, req.Address, amount, key, req.CommissionRate); err != nil {
 						http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 						return
 					}
