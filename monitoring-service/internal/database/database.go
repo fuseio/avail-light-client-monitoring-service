@@ -127,46 +127,39 @@ func (d *Database) RegisterClient(address string, operationPoints OperationPoint
 	ctx := context.Background()
 	now := time.Now()
 
-	// Prepare base client update
+	// Always update nft_amount & commission_rate.
 	clientUpdate := bson.M{
 		"$set": bson.M{
-			"address":        address,
-			"total_time":     totalTime,
-			"last_heartbeat": now,
+			"address":         address,
+			"total_time":      totalTime,
+			"last_heartbeat":  now,
+			"nft_amount":      operationPoints.Amount,
+			"commission_rate": operationPoints.CommissionRate,
 		},
 		"$setOnInsert": bson.M{
 			"created_at": now,
 		},
 	}
 
-	// Skip operation points processing if amount is 0
-	if operationPoints.Amount > 0 {
-		setFields := clientUpdate["$set"].(bson.M)
-		setFields["nft_amount"] = operationPoints.Amount
-		setFields["commission_rate"] = operationPoints.CommissionRate
-
-		// Record heartbeat if time > 0
-		if operationPoints.Time > 0 {
-			heartbeat := HeartbeatRecord{
-				ClientAddress: address,
-				Timestamp:     now,
-				Duration:      operationPoints.Time,
-				Amount:        operationPoints.Amount,
-			}
-			if _, err := d.heartbeats.InsertOne(ctx, heartbeat); err != nil {
-				return err
-			}
+	// Record heartbeat only if amount > 0 and time > 0.
+	if operationPoints.Amount > 0 && operationPoints.Time > 0 {
+		heartbeat := HeartbeatRecord{
+			ClientAddress: address,
+			Timestamp:     now,
+			Duration:      operationPoints.Time,
+			Amount:        operationPoints.Amount,
+		}
+		if _, err := d.heartbeats.InsertOne(ctx, heartbeat); err != nil {
+			return err
 		}
 	}
 
-	// Update client document
 	_, err := d.clients.UpdateOne(
 		ctx,
 		bson.M{"address": address},
 		clientUpdate,
 		options.Update().SetUpsert(true),
 	)
-
 	return err
 }
 
