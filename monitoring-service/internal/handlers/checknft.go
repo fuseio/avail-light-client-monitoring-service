@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
 
 	"monitoring-service/internal/blockchain/delegation"
+	"monitoring-service/internal/blockchain/nft"
 	"monitoring-service/internal/database"
 	"monitoring-service/pkg/config"
 
@@ -77,7 +80,7 @@ func updateDelegationClientRegistration(db *database.Database, address string, t
 	return db.RegisterDelegation(address, delegationPoints)
 }
 
-func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
+func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller, nftChecker *nft.NFTChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -124,50 +127,85 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			http.Error(w, "Failed to get incoming delegations", http.StatusInternalServerError)
 			return
 		}
+
 		if len(incommingDelegation) > 0 {
-			// filter by rights and contract address
 			var delegations []delegation.IDelegateRegistryDelegation
+			delegatorBalances := make(map[string]int64)
+
+			// First collect all delegations and check delegator balances
 			for _, delegation := range incommingDelegation {
 				delegationRights := [32]byte(delegation.Rights)
 				configRights := [32]byte(cfg.Rights)
 				if delegationRights == configRights && delegation.Contract == common.HexToAddress(cfg.NFTContractAddr) && delegation.Type == 5 {
-					delegations = append(delegations, delegation)
+					// Check delegator's NFT balance
+					balance, err := nftChecker.GetBatchBalance(delegation.From.String(), []*big.Int{delegation.TokenId})
+					if err != nil {
+						fmt.Printf("Failed to check NFT balance for delegator %s: %v\n", delegation.From.String(), err)
+						http.Error(w, "Failed to check NFT balance", http.StatusInternalServerError)
+						return
+					}
+
+					fmt.Printf("Delegation Check - From: %s, To: %s, TokenID: %s, DelegatedAmount: %d, ActualBalance: %d\n",
+						delegation.From.String(),
+						delegation.To.String(),
+						delegation.TokenId.String(),
+						delegation.Amount.Int64(),
+						balance[0].Int64())
+
+					if len(balance) > 0 && balance[0].Int64() > 0 {
+						delegations = append(delegations, delegation)
+						delegatorBalances[delegation.From.String()] += balance[0].Int64()
+					}
 				}
 			}
 
 			// get map From address to token id and amount
 			tokenIdMap := make(map[string]int64)
 			for _, delegation := range delegations {
-				tokenIdMap[delegation.From.String()] = tokenIdMap[delegation.From.String()] + delegation.Amount.Int64()
+				// Only count delegation amount up to delegator's actual balance
+				availableBalance := delegatorBalances[delegation.From.String()]
+				delegationAmount := delegation.Amount.Int64()
+				if delegationAmount > availableBalance {
+					delegationAmount = availableBalance
+				}
+				
+				if delegationAmount > 0 {
+					tokenIdMap[delegation.To.String()] = tokenIdMap[delegation.To.String()] + delegationAmount
+				}
 			}
-			
+
 			// sum up all the amounts
 			var totalAmount int64
 			for _, amount := range tokenIdMap {
 				totalAmount += amount
 			}
 
+			// Always update DB with the computed totalAmount (even if zero)
+			if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
+				http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
+				return
+			}
+			for key, amount := range tokenIdMap {
+				if err := updateDelegationClientRegistration(db, req.Address, amount, key, req.CommissionRate); err != nil {
+					http.Error(w, "Failed to update delegation registration", http.StatusInternalServerError)
+					return
+				}
+			}
+
+			// Set response based on totalAmount
 			if totalAmount > 0 {
 				response.Status = "success"
 				response.Message = "Address has NFT or delegation for required NFT"
-
-				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
-					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
-					return
-				}
-
-				// update delegation client registration
-				for key, amount := range tokenIdMap {
-					if err := updateDelegationClientRegistration(db, req.Address, amount, key, req.CommissionRate); err != nil {
-						http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
-						return
-					}
-				}
 			} else {
 				response.Status = "error"
 				response.Message = "Address does not own or have delegation for required NFT"
 			}
 		} else {
+			// If no incoming delegations, update the client's record to 0
+			if err := updateOwnershipClientRegistration(db, req.Address, 0, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
+				http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
+				return
+			}
 			response.Status = "error"
 			response.Message = "Address does not have any incoming delegations"
 		}
