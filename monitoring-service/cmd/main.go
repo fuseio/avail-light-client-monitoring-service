@@ -102,7 +102,7 @@ func setupRouter(db *database.Database, nftChecker *nft.NFTChecker, delegateRegi
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		handlers.CheckNFT(db, delegateRegistry)(w, r)
+		handlers.CheckNFT(db, delegateRegistry, nftChecker)(w, r)
 	}))
 
 	// Delegation check endpoint

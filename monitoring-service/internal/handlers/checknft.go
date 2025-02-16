@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
 
 	"monitoring-service/internal/blockchain/delegation"
+	"monitoring-service/internal/blockchain/nft"
 	"monitoring-service/internal/database"
 	"monitoring-service/pkg/config"
 
@@ -77,7 +79,7 @@ func updateDelegationClientRegistration(db *database.Database, address string, t
 	return db.RegisterDelegation(address, delegationPoints)
 }
 
-func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller) http.HandlerFunc {
+func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCaller, nftChecker *nft.NFTChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -124,23 +126,45 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			http.Error(w, "Failed to get incoming delegations", http.StatusInternalServerError)
 			return
 		}
+
 		if len(incommingDelegation) > 0 {
-			// filter by rights and contract address
 			var delegations []delegation.IDelegateRegistryDelegation
+			delegatorBalances := make(map[string]int64)
+
+			// First collect all delegations and check delegator balances
 			for _, delegation := range incommingDelegation {
 				delegationRights := [32]byte(delegation.Rights)
 				configRights := [32]byte(cfg.Rights)
 				if delegationRights == configRights && delegation.Contract == common.HexToAddress(cfg.NFTContractAddr) && delegation.Type == 5 {
-					delegations = append(delegations, delegation)
+					// Check delegator's NFT balance
+					balance, err := nftChecker.GetBatchBalance(delegation.From.String(), []*big.Int{delegation.TokenId})
+					if err != nil {
+						http.Error(w, "Failed to check NFT balance", http.StatusInternalServerError)
+						return
+					}
+
+					if len(balance) > 0 && balance[0].Int64() > 0 {
+						delegations = append(delegations, delegation)
+						delegatorBalances[delegation.From.String()] += balance[0].Int64()
+					}
 				}
 			}
 
 			// get map From address to token id and amount
 			tokenIdMap := make(map[string]int64)
 			for _, delegation := range delegations {
-				tokenIdMap[delegation.From.String()] = tokenIdMap[delegation.From.String()] + delegation.Amount.Int64()
+				// Only count delegation amount up to delegator's actual balance
+				availableBalance := delegatorBalances[delegation.From.String()]
+				delegationAmount := delegation.Amount.Int64()
+				if delegationAmount > availableBalance {
+					delegationAmount = availableBalance
+				}
+				
+				if delegationAmount > 0 {
+					tokenIdMap[delegation.To.String()] = tokenIdMap[delegation.To.String()] + delegationAmount
+				}
 			}
-			
+
 			// sum up all the amounts
 			var totalAmount int64
 			for _, amount := range tokenIdMap {
