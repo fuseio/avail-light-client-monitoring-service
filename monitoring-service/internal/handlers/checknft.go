@@ -138,7 +138,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			// get map From address to token id and amount
 			tokenIdMap := make(map[string]int64)
 			for _, delegation := range delegations {
-				tokenIdMap[delegation.To.String()] = tokenIdMap[delegation.To.String()] + delegation.Amount.Int64()
+				tokenIdMap[delegation.From.String()] = tokenIdMap[delegation.From.String()] + delegation.Amount.Int64()
 			}
 			
 			// sum up all the amounts
