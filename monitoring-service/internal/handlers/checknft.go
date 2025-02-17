@@ -180,8 +180,15 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				totalAmount += amount
 			}
 
-			if totalAmount > 0 {
-				// Only update DB if totalAmount > 0
+			// Check if this client already exists in the DB
+			exists, err := db.ClientExists(req.Address)
+			if err != nil {
+				http.Error(w, "Failed to check client existence", http.StatusInternalServerError)
+				return
+			}
+
+			// If client exists OR totalAmount > 0 (new client with non-zero delegation), update the record.
+			if exists || totalAmount > 0 {
 				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
 					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 					return
