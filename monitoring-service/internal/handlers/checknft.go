@@ -180,20 +180,25 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				totalAmount += amount
 			}
 
-			// Always update DB with the computed totalAmount (even if zero)
-			if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
-				http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
+			// Check if this client already exists in the DB
+			exists, err := db.ClientExists(req.Address)
+			if err != nil {
+				http.Error(w, "Failed to check client existence", http.StatusInternalServerError)
 				return
 			}
-			for key, amount := range tokenIdMap {
-				if err := updateDelegationClientRegistration(db, req.Address, amount, key, req.CommissionRate); err != nil {
-					http.Error(w, "Failed to update delegation registration", http.StatusInternalServerError)
+
+			// If client exists OR totalAmount > 0 (new client with non-zero delegation), update the record.
+			if exists || totalAmount > 0 {
+				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
+					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 					return
 				}
-			}
-
-			// Set response based on totalAmount
-			if totalAmount > 0 {
+				for key, amount := range tokenIdMap {
+					if err := updateDelegationClientRegistration(db, req.Address, amount, key, req.CommissionRate); err != nil {
+						http.Error(w, "Failed to update delegation registration", http.StatusInternalServerError)
+						return
+					}
+				}
 				response.Status = "success"
 				response.Message = "Address has NFT or delegation for required NFT"
 			} else {
@@ -201,11 +206,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				response.Message = "Address does not own or have delegation for required NFT"
 			}
 		} else {
-			// If no incoming delegations, update the client's record to 0
-			if err := updateOwnershipClientRegistration(db, req.Address, 0, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
-				http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
-				return
-			}
+			// No incoming delegation recorded: skip updating clients collection.
 			response.Status = "error"
 			response.Message = "Address does not have any incoming delegations"
 		}
