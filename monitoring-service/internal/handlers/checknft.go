@@ -32,32 +32,37 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		return err
 	}
 
-	// convert commission rate to float64
-	commissionRateFloat, err := strconv.ParseFloat(commissionRate, 64)
-	if err != nil {
-		return err
+	var commissionRateFloat float64
+	var clientRecord *database.ClientInfo
+
+	if exists {
+		clientRecord, err = db.GetClient(address)
+		if err != nil {
+			return err
+		}
+		// Use the already set commission rate.
+		commissionRateFloat = clientRecord.CommissionRate
+	} else {
+		commissionRateFloat, err = strconv.ParseFloat(commissionRate, 64)
+		if err != nil {
+			return err
+		}
 	}
 
 	totalTime := 0
 	operationPoints := database.OperationPointRecord{
 		Amount:         totalAmount,
-		Timestamp:     time.Now(),
+		Timestamp:      time.Now(),
 		CommissionRate: commissionRateFloat,
 		Time:           0,
 	}
-	
+
 	if exists {
-		client, err := db.GetClient(address)
-		if err != nil {
-			return err
-		}
-		
-		totalTime = int(client.TotalTime) + int(time.Since(client.LastHeartbeat).Seconds())
-		if time.Since(client.LastHeartbeat) <= time.Duration(checkNFTInterval) * time.Minute {
-			// update Time of the operationPoints
-			operationPoints.Time = int64(time.Since(client.LastHeartbeat).Seconds())
+		totalTime = int(clientRecord.TotalTime) + int(time.Since(clientRecord.LastHeartbeat).Seconds())
+		if time.Since(clientRecord.LastHeartbeat) <= time.Duration(checkNFTInterval)*time.Minute {
+			operationPoints.Time = int64(time.Since(clientRecord.LastHeartbeat).Seconds())
 		} else {
-			operationPoints.Time = int64(0)
+			operationPoints.Time = 0
 		}
 	}
 
@@ -110,6 +115,23 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 		if req.CommissionRate == "" {
 			response.Status = "error"
 			response.Message = "Commission rate is required"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Check: commission rate must be between 0 and 10
+		commission, err := strconv.ParseFloat(req.CommissionRate, 64)
+		if err != nil {
+			response.Status = "error"
+			response.Message = "Invalid commission rate format"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		if commission < 0 || commission > 10 {
+			response.Status = "error"
+			response.Message = "Commission rate must be between 0 and 10"
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
 			return
