@@ -1,6 +1,7 @@
 package handlers
 
 import (
+
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -17,8 +18,10 @@ import (
 )
 
 type CheckNFTRequest struct {
-	Address string `json:"address"`
-	CommissionRate string `json:"commission_rate"`
+	Address              string `json:"address"`
+	CommissionRate       string `json:"commission_rate"`
+	OperatorName         string `json:"operator_name"`
+	RewardCollectorAddress string `json:"reward_collector_address"`
 }
 
 type CheckNFTResponse struct {
@@ -26,7 +29,7 @@ type CheckNFTResponse struct {
 	Message string `json:"message"`
 }
 
-func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int, commissionRate string) error {
+func updateOwnershipClientRegistration(db *database.Database, address string, totalAmount int64, checkNFTInterval int, commissionRate string, operatorName string, rewardCollectorAddress string) error {
 	exists, err := db.ClientExists(address)
 	if err != nil {
 		return err
@@ -74,7 +77,7 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 	}
 
-	return db.RegisterClient(address, operationPoints, int64(totalTime))
+	return db.RegisterClient(address, operationPoints, int64(totalTime), operatorName, rewardCollectorAddress)
 }
 
 func updateDelegationClientRegistration(db *database.Database, address string, totalAmount int64, delegationAddress string, commissionRate string) error {
@@ -104,7 +107,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			Status:  "success",
 			Message: "Client is registered and owns or has delegation for required NFT",
 		}
-
+	
 		var req CheckNFTRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -113,6 +116,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 
 		// Validate required fields
 		if req.Address == "" {
+			fmt.Println("Validation Error: Address is required")
 			response.Status = "error"
 			response.Message = "Address is required"
 			w.Header().Set("Content-Type", "application/json")
@@ -121,8 +125,27 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 		}
 
 		if req.CommissionRate == "" {
+			fmt.Println("Validation Error: Commission rate is required")
 			response.Status = "error"
 			response.Message = "Commission rate is required"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		if req.OperatorName == "" {
+			fmt.Println("Validation Error: Operator name is required")
+			response.Status = "error"
+			response.Message = "Operator name is required"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		if req.RewardCollectorAddress == "" {
+			fmt.Println("Validation Error: Reward collector address is required")
+			response.Status = "error"
+			response.Message = "Reward collector address is required"
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
 			return
@@ -131,6 +154,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 		// Check: commission rate must be between 0 and 10
 		commission, err := strconv.ParseFloat(req.CommissionRate, 64)
 		if err != nil {
+			fmt.Println("Validation Error: Invalid commission rate format")
 			response.Status = "error"
 			response.Message = "Invalid commission rate format"
 			w.Header().Set("Content-Type", "application/json")
@@ -138,6 +162,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			return
 		}
 		if commission < 0 || commission > 10 {
+			fmt.Println("Validation Error: Commission rate must be between 0 and 10")
 			response.Status = "error"
 			response.Message = "Commission rate must be between 0 and 10"
 			w.Header().Set("Content-Type", "application/json")
@@ -159,6 +184,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 		}
 
 		if len(incommingDelegation) > 0 {
+			fmt.Println("Incoming delegations found, processing...")
 			var delegations []delegation.IDelegateRegistryDelegation
 			delegatorBalances := make(map[string]int64)
 
@@ -219,7 +245,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 
 			// If client exists OR totalAmount > 0 (new client with non-zero delegation), update the record.
 			if exists || totalAmount > 0 {
-				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate); err != nil {
+				if err := updateOwnershipClientRegistration(db, req.Address, totalAmount, cfg.CheckNFTInterval, req.CommissionRate, req.OperatorName, req.RewardCollectorAddress); err != nil {
 					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 					return
 				}
@@ -232,11 +258,13 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				response.Status = "success"
 				response.Message = "Address has NFT or delegation for required NFT"
 			} else {
+				fmt.Println("No valid NFT or delegation found for the address.")
 				response.Status = "error"
 				response.Message = "Address does not own or have delegation for required NFT"
 			}
 		} else {
 			// No incoming delegation recorded: skip updating clients collection.
+			fmt.Println("No incoming delegations recorded.")
 			response.Status = "error"
 			response.Message = "Address does not have any incoming delegations"
 		}
