@@ -43,15 +43,17 @@ type DelegationPointRecord struct {
 }
 
 type ClientInfo struct {
-	Address        string    `bson:"address"`
-	TotalTime      int64     `bson:"total_time"`
-	LastHeartbeat  time.Time `bson:"last_heartbeat"`
-	CreatedAt      time.Time `bson:"created_at"`
-	NFTAmount      int64     `bson:"nft_amount"`
-	CommissionRate float64   `bson:"commission_rate"`
-	Status         string    `bson:"status"`
-	AllUptimePercentage float64 `bson:"all_uptime_percentage"`
-	WeeklyUptimePercentage float64 `bson:"weekly_uptime_percentage"`
+	Address                string    `bson:"address"`
+	TotalTime              int64     `bson:"total_time"`
+	LastHeartbeat          time.Time `bson:"last_heartbeat"`
+	CreatedAt              time.Time `bson:"created_at"`
+	NFTAmount              int64     `bson:"nft_amount"`
+	CommissionRate         float64   `bson:"commission_rate"`
+	Status                 string    `bson:"status"`
+	AllUptimePercentage     float64   `bson:"all_uptime_percentage"`
+	WeeklyUptimePercentage  float64   `bson:"weekly_uptime_percentage"`
+	OperatorName           string    `bson:"operator_name"`
+	RewardCollectorAddress  string    `bson:"reward_collector_address"`
 }
 
 type HeartbeatRecord struct {
@@ -123,18 +125,20 @@ func (d *Database) Close() error {
 	return d.client.Disconnect(ctx)
 }
 
-func (d *Database) RegisterClient(address string, operationPoints OperationPointRecord, totalTime int64) error {
+func (d *Database) RegisterClient(address string, operationPoints OperationPointRecord, totalTime int64, operatorName string, rewardCollectorAddress string) error {
 	ctx := context.Background()
 	now := time.Now()
 
-	// Always update nft_amount & commission_rate.
+	// Update all relevant fields in ClientInfo
 	clientUpdate := bson.M{
 		"$set": bson.M{
-			"address":         address,
-			"total_time":      totalTime,
-			"last_heartbeat":  now,
-			"nft_amount":      operationPoints.Amount,
-			"commission_rate": operationPoints.CommissionRate,
+			"address":                address,
+			"total_time":             totalTime,
+			"last_heartbeat":         now,
+			"nft_amount":             operationPoints.Amount,
+			"commission_rate":        operationPoints.CommissionRate,
+			"operator_name":          operatorName,
+			"reward_collector_address": rewardCollectorAddress,
 		},
 		"$setOnInsert": bson.M{
 			"created_at": now,
