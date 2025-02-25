@@ -45,6 +45,14 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 		// Use the already set commission rate.
 		commissionRateFloat = clientRecord.CommissionRate
+		
+		// Use existing values if new ones are not provided
+		if operatorName == "" {
+			operatorName = clientRecord.OperatorName
+		}
+		if rewardCollectorAddress == "" {
+			rewardCollectorAddress = clientRecord.RewardCollectorAddress
+		}
 	} else {
 		commissionRateFloat, err = strconv.ParseFloat(commissionRate, 64)
 		if err != nil {
@@ -120,24 +128,6 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			fmt.Println("Validation Error: Commission rate is required")
 			response.Status = "error"
 			response.Message = "Commission rate is required"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
-		if req.OperatorName == "" {
-			fmt.Println("Validation Error: Operator name is required")
-			response.Status = "error"
-			response.Message = "Operator name is required"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
-		if req.RewardCollectorAddress == "" {
-			fmt.Println("Validation Error: Reward collector address is required")
-			response.Status = "error"
-			response.Message = "Reward collector address is required"
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
 			return
