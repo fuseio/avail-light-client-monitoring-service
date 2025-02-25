@@ -42,6 +42,14 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 		// Use the already set commission rate.
 		commissionRateFloat = clientRecord.CommissionRate
+		
+		// Use existing values if new ones are not provided
+		if operatorName == "" {
+			operatorName = clientRecord.OperatorName
+		}
+		if rewardCollectorAddress == "" {
+			rewardCollectorAddress = clientRecord.RewardCollectorAddress
+		}
 	} else {
 		commissionRateFloat, err = strconv.ParseFloat(commissionRate, 64)
 		if err != nil {
