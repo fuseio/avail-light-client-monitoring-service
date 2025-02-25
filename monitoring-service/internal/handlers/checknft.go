@@ -133,24 +133,6 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 			return
 		}
 
-		if req.OperatorName == "" {
-			fmt.Println("Validation Error: Operator name is required")
-			response.Status = "error"
-			response.Message = "Operator name is required"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
-		if req.RewardCollectorAddress == "" {
-			fmt.Println("Validation Error: Reward collector address is required")
-			response.Status = "error"
-			response.Message = "Reward collector address is required"
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-
 		// Check: commission rate must be between 0 and 10
 		commission, err := strconv.ParseFloat(req.CommissionRate, 64)
 		if err != nil {
