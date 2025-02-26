@@ -402,3 +402,31 @@ func (d *Database) GetFromDelegationsByAddress(address string) ([]DelegationReco
 
 	return delegations, nil
 }
+
+// ClearDelegationsForAddress removes all delegation records for a specific address
+// that are no longer valid based on the current blockchain state
+func (d *Database) ClearDelegationsForAddress(address string, validFromAddresses []string) error {
+	ctx := context.Background()
+	
+	// If we have valid delegations, only remove the ones not in the list
+	if len(validFromAddresses) > 0 {
+		// Create a filter that matches delegations to this address 
+		// but from addresses not in our valid list
+		filter := bson.M{
+			"to_address": address,
+			"from_address": bson.M{
+				"$nin": validFromAddresses,
+			},
+		}
+		
+		_, err := d.delegations.DeleteMany(ctx, filter)
+		return err
+	}
+	
+	// If no valid delegations, remove all delegations to this address
+	_, err := d.delegations.DeleteMany(ctx, bson.M{
+		"to_address": address,
+	})
+	
+	return err
+}
