@@ -36,13 +36,24 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 	var commissionRateFloat float64
 	var clientRecord *database.ClientInfo
 
+	// Always use the new commission rate if provided
+	if commissionRate != "" {
+		commissionRateFloat, err = strconv.ParseFloat(commissionRate, 64)
+		if err != nil {
+			return err
+		}
+	}
+
 	if exists {
 		clientRecord, err = db.GetClient(address)
 		if err != nil {
 			return err
 		}
-		// Use the already set commission rate.
-		commissionRateFloat = clientRecord.CommissionRate
+		
+		// Only use existing commission rate if new one wasn't provided
+		if commissionRate == "" {
+			commissionRateFloat = clientRecord.CommissionRate
+		}
 		
 		// Use existing values if new ones are not provided
 		if operatorName == "" {
@@ -50,11 +61,6 @@ func updateOwnershipClientRegistration(db *database.Database, address string, to
 		}
 		if rewardCollectorAddress == "" {
 			rewardCollectorAddress = clientRecord.RewardCollectorAddress
-		}
-	} else {
-		commissionRateFloat, err = strconv.ParseFloat(commissionRate, 64)
-		if err != nil {
-			return err
 		}
 	}
 
