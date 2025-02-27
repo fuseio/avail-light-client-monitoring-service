@@ -1,14 +1,12 @@
 package handlers
 
 import (
-
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/http"
 	"strconv"
 	"time"
-
 	"monitoring-service/internal/blockchain/delegation"
 	"monitoring-service/internal/blockchain/nft"
 	"monitoring-service/internal/database"
@@ -87,11 +85,30 @@ func updateDelegationClientRegistration(db *database.Database, address string, t
 		return err
 	}
 
+	// Get client to check last heartbeat time
+	exists, err := db.ClientExists(address)
+	if err != nil {
+		return err
+	}
+
+	var timeValue int64 = 0
+	if exists {
+		client, err := db.GetClient(address)
+		if err != nil {
+			return err
+		}
+		
+		// Calculate time since last heartbeat
+		timeSinceHeartbeat := time.Since(client.LastHeartbeat).Seconds()
+		timeValue = int64(timeSinceHeartbeat)
+	}
+
 	delegationPoints := database.DelegationPointRecord{
 		Address:        delegationAddress,
 		Amount:         totalAmount,
 		Timestamp:      time.Now(),
 		CommissionRate: commissionRateFloat,
+		Time:           timeValue,
 	}
 	return db.RegisterDelegation(address, delegationPoints)
 }
@@ -208,7 +225,7 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				}
 				
 				if delegationAmount > 0 {
-					tokenIdMap[delegation.To.String()] = tokenIdMap[delegation.To.String()] + delegationAmount
+					tokenIdMap[delegation.From.String()] = tokenIdMap[delegation.From.String()] + delegationAmount
 				}
 			}
 
@@ -231,12 +248,27 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 					http.Error(w, "Failed to update client registration", http.StatusInternalServerError)
 					return
 				}
-				for key, amount := range tokenIdMap {
-					if err := updateDelegationClientRegistration(db, req.Address, amount, key, req.CommissionRate); err != nil {
+				
+				// Collect valid delegator addresses
+				var validDelegators []string
+				for fromAddr := range tokenIdMap {
+					validDelegators = append(validDelegators, fromAddr)
+				}
+
+				// Clear any delegations that are no longer valid
+				if err := db.ClearDelegationsForAddress(req.Address, validDelegators); err != nil {
+					http.Error(w, "Failed to clear invalid delegations", http.StatusInternalServerError)
+					return
+				}
+
+				// Then continue with updating the valid delegations
+				for fromAddr, amount := range tokenIdMap {
+					if err := updateDelegationClientRegistration(db, req.Address, amount, fromAddr, req.CommissionRate); err != nil {
 						http.Error(w, "Failed to update delegation registration", http.StatusInternalServerError)
 						return
 					}
 				}
+				
 				response.Status = "success"
 				response.Message = "Address has NFT or delegation for required NFT"
 			} else {
