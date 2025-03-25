@@ -1,7 +1,7 @@
 version: "3.8"
 
 services:
-  app:
+  monitoring-service:
     build: ./monitoring-service
     ports:
       - "8080:8080"
@@ -16,6 +16,24 @@ services:
       - CHECK_NFT_INTERVAL=6
     depends_on:
       - mongo
+    restart: unless-stopped
+
+  reward-service:
+    build: ./reward-service
+    ports:
+      - "8081:8081"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - MONGO_DB=lc-monitoring
+      - PORT=:8081
+      - RPC_URL=https://rpc.fuse.io
+      - NFT_CONTRACT_ADDRESS=0xB42F66f690816D2B076D26B20697Aa594dc1Fd2f
+      - DELEGATE_CONTRACT_ADDRESS=0xf9689022f129aeb4495f6c33bacf4bcaba1f8fca
+      - RIGHTS=0x4675736520456d626572204e6f6465204c6963656e7365000000000000000000
+      - CHECK_NFT_INTERVAL=6
+    depends_on:
+      - mongo
+      - monitoring-service
     restart: unless-stopped
 
   mongo:

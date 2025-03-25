@@ -17,6 +17,7 @@ import (
 	"monitoring-service/internal/database"
 	"monitoring-service/internal/handlers"
 	"monitoring-service/pkg/config"
+	"monitoring-service/internal/service"
 )
 
 func main() {
@@ -57,6 +58,8 @@ func main() {
 		Addr:    cfg.Port,
 		Handler: setupRouter(db, nftChecker, delegateRegistry),
 	}
+	userService := service.NewUserService(db, logger)
+	go userService.Start()
 
 	// Start server
 	go func() {

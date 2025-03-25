@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -255,23 +256,48 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 					return
 				}
 				
-				// Collect valid delegator addresses
+				_, err := db.GetOrCreateUser(req.Address, database.UserTypeOperator)
+				if err != nil {
+					log.Printf("Warning: Failed to create user record for operator %s: %v", req.Address, err)
+				} else {
+					log.Printf("User record created/updated for operator %s", req.Address)
+				}
+				
 				var validDelegators []string
 				for fromAddr := range tokenIdMap {
 					validDelegators = append(validDelegators, fromAddr)
+					
+					if fromAddr != "" && fromAddr != "0x" && fromAddr != "0x0" && len(fromAddr) > 3 {
+						_, err := db.GetOrCreateUser(fromAddr, database.UserTypeDelegate)
+						if err != nil {
+							log.Printf("Warning: Failed to create user record for delegator %s: %v", fromAddr, err)
+						} else {
+							log.Printf("User record created/updated for delegator %s", fromAddr)
+						}
+					}
 				}
 
-				// Clear any delegations that are no longer valid
 				if err := db.ClearDelegationsForAddress(req.Address, validDelegators); err != nil {
 					http.Error(w, "Failed to clear invalid delegations", http.StatusInternalServerError)
 					return
 				}
 
-				// Then continue with updating the valid delegations
 				for fromAddr, amount := range tokenIdMap {
 					if err := updateDelegationClientRegistration(db, req.Address, amount, fromAddr, req.CommissionRate); err != nil {
 						http.Error(w, "Failed to update delegation registration", http.StatusInternalServerError)
 						return
+					}
+				}
+				
+				if err := db.SyncOperatorDelegators(req.Address); err != nil {
+					log.Printf("Warning: Failed to sync delegators for operator %s: %v", req.Address, err)
+				}
+				
+				for fromAddr := range tokenIdMap {
+					if fromAddr != "" && fromAddr != "0x" && fromAddr != "0x0" && len(fromAddr) > 3 {
+						if err := db.SyncDelegatorOperators(fromAddr); err != nil {
+							log.Printf("Warning: Failed to sync operators for delegator %s: %v", fromAddr, err)
+						}
 					}
 				}
 				
@@ -283,7 +309,6 @@ func CheckNFT(db *database.Database, delegateRegistry *delegation.DelegationCall
 				response.Message = "Address does not own or have delegation for required NFT"
 			}
 		} else {
-			// No incoming delegation recorded: skip updating clients collection.
 			fmt.Println("No incoming delegations recorded.")
 			response.Status = "error"
 			response.Message = "Address does not have any incoming delegations"

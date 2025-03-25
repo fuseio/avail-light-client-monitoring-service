@@ -21,9 +21,11 @@ const (
 
 type Database struct {
 	client          *mongo.Client
+	db              *mongo.Database
 	clients         *mongo.Collection
 	heartbeats      *mongo.Collection
 	delegations     *mongo.Collection
+	users           *mongo.Collection
 	logger          *log.Logger
 }
 
@@ -87,34 +89,16 @@ func NewDatabase(mongoURI, dbName string, logger *log.Logger) (*Database, error)
 
 	db := client.Database(dbName)
 	
-	// Create time series collection for heartbeats
-	err = db.CreateCollection(ctx, "heartbeats", options.CreateCollection().SetTimeSeriesOptions(
-		options.TimeSeries().
-			SetTimeField("timestamp").
-			SetMetaField("client_address").
-			SetGranularity("minutes"),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create heartbeats collection: %v", err)
-	}
-
-	// Get collection using the provided database name
-	collection := db.Collection("clients")
-
-	// Create unique index on address if it doesn't exist
-	_, err = collection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "address", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create index: %v", err)
-	}
-
+	logger.Printf("Connected to MongoDB database: %s", dbName)
+	logger.Printf("Accessing collections: clients, delegations, heartbeats, users")
+	
 	return &Database{
 		client:      client,
-		clients:     collection,
-		heartbeats:  db.Collection("heartbeats"),
+		db:          db,
+		clients:     db.Collection("clients"),
 		delegations: db.Collection("delegations"),
+		heartbeats:  db.Collection("heartbeats"),
+		users:       db.Collection("users"),
 		logger:      logger,
 	}, nil
 }
@@ -171,6 +155,14 @@ func (d *Database) RegisterDelegation(address string, delegationPoints Delegatio
 	ctx := context.Background()
 	now := time.Now()
 
+	exists, err := d.ClientExists(address)
+	if err != nil {
+		d.logger.Printf("Warning: Error checking if client exists: %v", err)
+	} else if !exists {
+		d.logger.Printf("Warning: Attempted to register delegation to non-existent operator %s", address)
+		return fmt.Errorf("operator %s does not exist", address)
+	}
+
 	delegation := DelegationRecord{
 		FromAddress:    delegationPoints.Address,
 		ToAddress:      address,
@@ -185,14 +177,76 @@ func (d *Database) RegisterDelegation(address string, delegationPoints Delegatio
 	}
 	update := bson.M{"$set": delegation}
 	
-	_, err := d.delegations.UpdateOne(
+	_, err = d.delegations.UpdateOne(
 		ctx,
 		filter,
 		update,
 		options.Update().SetUpsert(true),
 	)
-
-	return err
+	
+	if err != nil {
+		return err
+	}
+	
+	operatorUser, err := d.GetOrCreateUser(address, UserTypeOperator)
+	if err != nil {
+		d.logger.Printf("Warning: Failed to get operator user %s: %v", address, err)
+	} else {
+		if operatorUser.Delegators == nil {
+			operatorUser.Delegators = make(map[string]int64)
+		}
+		
+		operatorUser.Delegators[delegationPoints.Address] = delegationPoints.Amount
+		
+		_, err = d.users.UpdateOne(
+			ctx,
+			bson.M{
+				"address": address,
+				"user_type": UserTypeOperator,
+			},
+			bson.M{
+				"$set": bson.M{
+					"delegators": operatorUser.Delegators,
+					"updated_at": now,
+				},
+			},
+		)
+		
+		if err != nil {
+			d.logger.Printf("Warning: Failed to update operator's delegators map: %v", err)
+		}
+	}
+	
+	delegatorUser, err := d.GetOrCreateUser(delegationPoints.Address, UserTypeDelegate)
+	if err != nil {
+		d.logger.Printf("Warning: Failed to get delegator user %s: %v", delegationPoints.Address, err)
+	} else {
+		if delegatorUser.Operators == nil {
+			delegatorUser.Operators = make(map[string]int64)
+		}
+		
+		delegatorUser.Operators[address] = delegationPoints.Amount
+		
+		_, err = d.users.UpdateOne(
+			ctx,
+			bson.M{
+				"address": delegationPoints.Address,
+				"user_type": UserTypeDelegate,
+			},
+			bson.M{
+				"$set": bson.M{
+					"operators": delegatorUser.Operators,
+					"updated_at": now,
+				},
+			},
+		)
+		
+		if err != nil {
+			d.logger.Printf("Warning: Failed to update delegator's operators map: %v", err)
+		}
+	}
+	
+	return nil
 }
 
 func (d *Database) ClientExists(address string) (bool, error) {
@@ -209,9 +263,9 @@ func (d *Database) ClientExists(address string) (bool, error) {
 
 func (d *Database) GetClient(address string) (*ClientInfo, error) {
 	ctx := context.Background()
-	var client ClientInfo
+	var clientInfo ClientInfo
 	
-	err := d.clients.FindOne(ctx, bson.M{"address": address}).Decode(&client)
+	err := d.clients.FindOne(ctx, bson.M{"address": address}).Decode(&clientInfo)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, nil
@@ -220,7 +274,7 @@ func (d *Database) GetClient(address string) (*ClientInfo, error) {
 		return nil, err
 	}
 
-	return &client, nil
+	return &clientInfo, nil
 }
 
 // Add this new function at the end of the file
@@ -408,6 +462,55 @@ func (d *Database) GetFromDelegationsByAddress(address string) ([]DelegationReco
 func (d *Database) ClearDelegationsForAddress(address string, validFromAddresses []string) error {
 	ctx := context.Background()
 	
+	operatorUser, err := d.GetOrCreateUser(address, UserTypeOperator)
+	if err != nil {
+		d.logger.Printf("Warning: Failed to get operator user %s: %v", address, err)
+	} else {
+		if operatorUser.Delegators == nil {
+			operatorUser.Delegators = make(map[string]int64)
+		}
+		
+		validDelegators := make(map[string]bool)
+		for _, addr := range validFromAddresses {
+			validDelegators[addr] = true
+		}
+		
+		delegatorsToRemove := []string{}
+		for delegator := range operatorUser.Delegators {
+			if !validDelegators[delegator] {
+				delegatorsToRemove = append(delegatorsToRemove, delegator)
+				
+				d.removeOperatorFromDelegator(delegator, address)
+			}
+		}
+		
+		for _, delegator := range delegatorsToRemove {
+			delete(operatorUser.Delegators, delegator)
+		}
+		
+		if len(delegatorsToRemove) > 0 {
+			_, err = d.users.UpdateOne(
+				ctx,
+				bson.M{
+					"address": address,
+					"user_type": UserTypeOperator,
+				},
+				bson.M{
+					"$set": bson.M{
+						"delegators": operatorUser.Delegators,
+						"updated_at": time.Now(),
+					},
+				},
+			)
+			
+			if err != nil {
+				d.logger.Printf("Warning: Failed to update operator's delegators map: %v", err)
+			} else {
+				d.logger.Printf("Removed %d invalid delegators from operator %s", len(delegatorsToRemove), address)
+			}
+		}
+	}
+	
 	// If we have valid delegations, only remove the ones not in the list
 	if len(validFromAddresses) > 0 {
 		// Create a filter that matches delegations to this address 
@@ -424,9 +527,56 @@ func (d *Database) ClearDelegationsForAddress(address string, validFromAddresses
 	}
 	
 	// If no valid delegations, remove all delegations to this address
-	_, err := d.delegations.DeleteMany(ctx, bson.M{
+	_, err = d.delegations.DeleteMany(ctx, bson.M{
 		"to_address": address,
 	})
 	
 	return err
+}
+
+// removeOperatorFromDelegator removes an operator from a delegator's operators map
+func (d *Database) removeOperatorFromDelegator(delegatorAddress, operatorAddress string) {
+	ctx := context.Background()
+	
+	// Get the delegator user
+	delegatorUser, err := d.GetOrCreateUser(delegatorAddress, UserTypeDelegate)
+	if err != nil {
+		d.logger.Printf("Warning: Failed to get delegator user %s: %v", delegatorAddress, err)
+		return
+	}
+	
+	// Initialize operators map if it's nil
+	if delegatorUser.Operators == nil {
+		delegatorUser.Operators = make(map[string]int64)
+		return // Nothing to remove
+	}
+	
+	// Check if the operator exists in the map
+	if _, exists := delegatorUser.Operators[operatorAddress]; !exists {
+		return // Nothing to remove
+	}
+	
+	// Remove the operator from the map
+	delete(delegatorUser.Operators, operatorAddress)
+	
+	// Update the user record
+	_, err = d.users.UpdateOne(
+		ctx,
+		bson.M{
+			"address": delegatorAddress,
+			"user_type": UserTypeDelegate,
+		},
+		bson.M{
+			"$set": bson.M{
+				"operators": delegatorUser.Operators,
+				"updated_at": time.Now(),
+			},
+		},
+	)
+	
+	if err != nil {
+		d.logger.Printf("Warning: Failed to update delegator's operators map: %v", err)
+	} else {
+		d.logger.Printf("Removed operator %s from delegator %s", operatorAddress, delegatorAddress)
+	}
 }
