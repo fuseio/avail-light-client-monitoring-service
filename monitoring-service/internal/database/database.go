@@ -570,6 +570,55 @@ func (d *Database) ClearDelegationsForAddress(address string, validFromAddresses
 		normalizedValidAddrs[i] = strings.ToLower(addr)
 	}
 	
+	operatorUser, err := d.GetOrCreateUser(address, UserTypeOperator)
+	if err != nil {
+		d.logger.Printf("Warning: Failed to get operator user %s: %v", address, err)
+	} else {
+		if operatorUser.Delegators == nil {
+			operatorUser.Delegators = make(map[string]int64)
+		}
+		
+		validDelegators := make(map[string]bool)
+		for _, addr := range validFromAddresses {
+			validDelegators[addr] = true
+		}
+		
+		delegatorsToRemove := []string{}
+		for delegator := range operatorUser.Delegators {
+			if !validDelegators[delegator] {
+				delegatorsToRemove = append(delegatorsToRemove, delegator)
+				
+				d.removeOperatorFromDelegator(delegator, address)
+			}
+		}
+		
+		for _, delegator := range delegatorsToRemove {
+			delete(operatorUser.Delegators, delegator)
+		}
+		
+		if len(delegatorsToRemove) > 0 {
+			_, err = d.users.UpdateOne(
+				ctx,
+				bson.M{
+					"address": address,
+					"user_type": UserTypeOperator,
+				},
+				bson.M{
+					"$set": bson.M{
+						"delegators": operatorUser.Delegators,
+						"updated_at": time.Now(),
+					},
+				},
+			)
+			
+			if err != nil {
+				d.logger.Printf("Warning: Failed to update operator's delegators map: %v", err)
+			} else {
+				d.logger.Printf("Removed %d invalid delegators from operator %s", len(delegatorsToRemove), address)
+			}
+		}
+	}
+	
 	// If we have valid delegations, only remove the ones not in the list
 	if len(normalizedValidAddrs) > 0 {
 		filter := bson.M{
