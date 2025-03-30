@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -87,15 +88,26 @@ func NewDatabase(mongoURI, dbName string, logger *log.Logger) (*Database, error)
 
 	db := client.Database(dbName)
 	
-	// Create time series collection for heartbeats
-	err = db.CreateCollection(ctx, "heartbeats", options.CreateCollection().SetTimeSeriesOptions(
-		options.TimeSeries().
-			SetTimeField("timestamp").
-			SetMetaField("client_address").
-			SetGranularity("minutes"),
-	))
+	// Check if heartbeats collection exists before creating it
+	collections, err := db.ListCollectionNames(ctx, bson.M{"name": "heartbeats"})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create heartbeats collection: %v", err)
+		return nil, fmt.Errorf("failed to list collections: %v", err)
+	}
+	
+	// Only create collection if it doesn't exist
+	if len(collections) == 0 {
+		err = db.CreateCollection(ctx, "heartbeats", options.CreateCollection().SetTimeSeriesOptions(
+			options.TimeSeries().
+				SetTimeField("timestamp").
+				SetMetaField("client_address").
+				SetGranularity("minutes"),
+		))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create heartbeats collection: %v", err)
+		}
+		logger.Println("Created time series collection: heartbeats")
+	} else {
+		logger.Println("Heartbeats collection already exists, skipping creation")
 	}
 
 	// Get collection using the provided database name
@@ -128,6 +140,10 @@ func (d *Database) Close() error {
 func (d *Database) RegisterClient(address string, operationPoints OperationPointRecord, totalTime int64, operatorName string, rewardCollectorAddress string) error {
 	ctx := context.Background()
 	now := time.Now()
+
+	
+	address = strings.ToLower(address)
+	rewardCollectorAddress = strings.ToLower(rewardCollectorAddress)
 
 	// Update all relevant fields in ClientInfo
 	clientUpdate := bson.M{
@@ -170,6 +186,10 @@ func (d *Database) RegisterClient(address string, operationPoints OperationPoint
 func (d *Database) RegisterDelegation(address string, delegationPoints DelegationPointRecord) error {
 	ctx := context.Background()
 	now := time.Now()
+	
+	
+	address = strings.ToLower(address)
+	delegationPoints.Address = strings.ToLower(delegationPoints.Address)
 
 	delegation := DelegationRecord{
 		FromAddress:    delegationPoints.Address,
@@ -178,7 +198,7 @@ func (d *Database) RegisterDelegation(address string, delegationPoints Delegatio
 		CommissionRate: delegationPoints.CommissionRate,
 		Timestamp:      now,
 	}
-		
+	
 	filter := bson.M{
 		"from_address": delegationPoints.Address,
 		"to_address":   address,
@@ -198,10 +218,12 @@ func (d *Database) RegisterDelegation(address string, delegationPoints Delegatio
 func (d *Database) ClientExists(address string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
+	
+	
+	address = strings.ToLower(address)
+	
 	count, err := d.clients.CountDocuments(ctx, bson.M{"address": address})
 	if err != nil {
-		d.logger.Printf("Error checking client existence: %v", err)
 		return false, err
 	}
 	return count > 0, nil
@@ -211,12 +233,14 @@ func (d *Database) GetClient(address string) (*ClientInfo, error) {
 	ctx := context.Background()
 	var client ClientInfo
 	
+	
+	address = strings.ToLower(address)
+	
 	err := d.clients.FindOne(ctx, bson.M{"address": address}).Decode(&client)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, nil
 		}
-		d.logger.Printf("Error getting client: %v", err)
 		return nil, err
 	}
 
@@ -345,6 +369,9 @@ func (d *Database) setupIndexes(ctx context.Context) error {
 func (d *Database) GetClientWithHistory(address string) (*ClientInfo, []HeartbeatRecord, []DelegationRecord, error) {
 	ctx := context.Background()
 	
+	
+	address = strings.ToLower(address)
+	
 	// Get client info
 	client, err := d.GetClient(address)
 	if err != nil {
@@ -385,8 +412,10 @@ func (d *Database) GetClientWithHistory(address string) (*ClientInfo, []Heartbea
 
 func (d *Database) GetFromDelegationsByAddress(address string) ([]DelegationRecord, error) {
 	ctx := context.Background()
+	
+	
+	address = strings.ToLower(address)
 
-	// Query for delegations where the address is the 'from' address
 	cursor, err := d.delegations.Find(ctx, bson.M{
 		"from_address": address,
 	})
@@ -408,14 +437,19 @@ func (d *Database) GetFromDelegationsByAddress(address string) ([]DelegationReco
 func (d *Database) ClearDelegationsForAddress(address string, validFromAddresses []string) error {
 	ctx := context.Background()
 	
+	
+	address = strings.ToLower(address)
+	normalizedValidAddrs := make([]string, len(validFromAddresses))
+	for i, addr := range validFromAddresses {
+		normalizedValidAddrs[i] = strings.ToLower(addr)
+	}
+	
 	// If we have valid delegations, only remove the ones not in the list
-	if len(validFromAddresses) > 0 {
-		// Create a filter that matches delegations to this address 
-		// but from addresses not in our valid list
+	if len(normalizedValidAddrs) > 0 {
 		filter := bson.M{
 			"to_address": address,
 			"from_address": bson.M{
-				"$nin": validFromAddresses,
+				"$nin": normalizedValidAddrs,
 			},
 		}
 		
