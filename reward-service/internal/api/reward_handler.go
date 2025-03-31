@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"reward-service/internal/database"
+	"reward-service/internal/service"
 )
 
 type RewardHandler struct {
@@ -172,6 +174,36 @@ func (h *RewardHandler) HandleClaimAllRewards(w http.ResponseWriter, r *http.Req
 
 func (h *RewardHandler) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/rewards/claim", h.ClaimReward).Methods("POST")
-	router.HandleFunc("/rewards/user/{address}", h.GetUserRewards).Methods("GET")
-	router.HandleFunc("/claim-all-rewards", h.HandleClaimAllRewards).Methods("POST")
+	router.HandleFunc("/rewards/claim-all", h.HandleClaimAllRewards).Methods("POST")
+	router.HandleFunc("/clients/{address}/rewards", h.GetUserRewards).Methods("GET")
+	router.HandleFunc("/admin/process-rewards", h.ProcessRewards).Methods("POST")
+}
+
+func (h *RewardHandler) ProcessRewards(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("Admin-Token")
+	if token != os.Getenv("ADMIN_TOKEN") {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		CycleID string `json:"cycle_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.CycleID = ""
+	}
+
+	rewardService := service.NewRewardService(h.db.GetMongoDatabase(), h.logger)
+	err := rewardService.ProcessRewardsManually(req.CycleID)
+	if err != nil {
+		h.logger.Printf("ERROR: Failed to process rewards: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to process rewards: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Rewards processed successfully",
+	})
 }

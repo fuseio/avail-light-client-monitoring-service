@@ -9,141 +9,115 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"reward-service/internal/api"
 	"reward-service/internal/database"
-	"reward-service/internal/handlers"
 	"reward-service/internal/service"
-	"reward-service/pkg/config"
 )
 
 func main() {
-	// Initialize logger
-	logger := log.New(os.Stdout, "[Server] ", log.LstdFlags|log.Lshortfile)
+	logger := log.New(os.Stdout, "[REWARD-SERVICE] ", log.LstdFlags)
+	logger.Println("Starting reward service...")
 
-	// Load configuration
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		logger.Fatalf("Failed to load config: %v", err)
+	// Connect to MongoDB
+	mongoURI := os.Getenv("MONGO_URI")
+	if mongoURI == "" {
+		mongoURI = "mongodb://localhost:27017"
 	}
 	
-	logger.Printf("Starting reward service with configuration:")
-	logger.Printf("MongoDB URI: %s", cfg.MongoURI)
-	logger.Printf("MongoDB Database: %s", cfg.MongoDB)
-	logger.Printf("Port: %s", cfg.Port)
-	logger.Printf("Check NFT Interval: %d minutes", cfg.CheckNFTInterval)
-
-	// Initialize database
-	logger.Printf("Connecting to MongoDB...")
-	db, err := database.NewDatabase(cfg.MongoURI, cfg.MongoDB, logger)
+	mongoDB := os.Getenv("MONGO_DB")
+	if mongoDB == "" {
+		mongoDB = "lc-monitoring"
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		logger.Fatalf("Failed to initialize database: %v", err)
+		logger.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	defer db.Close()
-	logger.Printf("Successfully connected to MongoDB")
-
-	// Initialize reward service
-	rewardInterval := time.Duration(cfg.CheckNFTInterval) * time.Minute
-	logger.Printf("Initializing reward service with interval: %v", rewardInterval)
-	rewardService := service.NewRewardService(db, rewardInterval, logger)
-	rewardService.Start()
-	defer rewardService.Stop()
-
-	// Initialize server
+	
+	// Ping the database
+	if err := client.Ping(ctx, nil); err != nil {
+		logger.Fatalf("Failed to ping MongoDB: %v", err)
+	}
+	
+	logger.Printf("Connected to MongoDB: %s", mongoURI)
+	
+	// Create database wrapper
+	db := client.Database(mongoDB)
+	dbWrapper := database.NewDatabase(client, db, logger)
+	
+	// Create database indexes
+	if err := dbWrapper.AddIndexes(); err != nil {
+		logger.Printf("Warning: Failed to create database indexes: %v", err)
+	}
+	
+	// Create API handlers
+	rewardHandler := api.NewRewardHandler(dbWrapper, logger)
+	
+	// Set up router
+	router := mux.NewRouter()
+	rewardHandler.RegisterRoutes(router)
+	
+	// Add health check endpoint
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}).Methods("GET")
+	
+	// Start reward service
+	rewardService := service.NewRewardService(db, logger)
+	rewardService.ScheduleRewards()
+	
+	// Get port from environment
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8081"
+	}
+	if port[0] == ':' {
+		port = port[1:]
+	}
+	
+	// Create and start server
 	server := &http.Server{
-		Addr:    cfg.Port,
-		Handler: setupRouter(db, logger),
+		Addr:    ":" + port,
+		Handler: router,
 	}
-
-	// Start server
+	
+	// Start server in a goroutine
 	go func() {
-		logger.Printf("Starting server on port %s", server.Addr)
+		logger.Printf("Server listening on port %s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("Failed to start server: %v", err)
 		}
 	}()
-
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Println("Shutting down server...")
-
-	// Create a deadline for graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	
+	// Set up graceful shutdown
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	
+	logger.Println("Shutting down...")
+	
+	// Stop the reward scheduler
+	rewardService.Stop()
+	
+	// Shut down the server
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Printf("Server forced to shutdown: %v", err)
+		logger.Fatalf("Server shutdown failed: %v", err)
 	}
-
-	logger.Println("Server exited properly")
-}
-
-func setupRouter(db *database.Database, logger *log.Logger) http.Handler {
-	mux := http.NewServeMux()
-
-	// Add health check endpoint
-	mux.HandleFunc("/health", logRequest(handlers.HealthCheckWithLogging(logger), logger))
-
-	// Add reward service endpoints
-	mux.HandleFunc("/clients", logRequest(handlers.GetClients(db, logger), logger))
-	mux.HandleFunc("/rewards/summary", logRequest(handlers.GetRewardsSummary(db, logger), logger))
-	mux.HandleFunc("/rewards/latest", logRequest(handlers.GetLatestRewards(db, logger), logger))
-	mux.HandleFunc("/clients/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		
-		// Handle /clients/{address}/rewards
-		if len(path) > 8 && path[len(path)-8:] == "/rewards" {
-			logRequest(handlers.GetClientRewards(db, logger), logger)(w, r)
-			return
-		}
-		
-		// Handle /clients/{address}/points
-		if len(path) > 7 && path[len(path)-7:] == "/points" {
-			logRequest(handlers.GetClientPoints(db, logger), logger)(w, r)
-			return
-		}
-		
-		// Handle other /clients/ paths
-		http.NotFound(w, r)
-	})
-
-	return mux
-}
-
-func logRequest(next http.HandlerFunc, logger *log.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		startTime := time.Now()
-
-		// Create a custom response writer to capture the status code
-		lrw := newLoggingResponseWriter(w)
-
-		// Call the next handler
-		next.ServeHTTP(lrw, r)
-
-		// Log the request details
-		logger.Printf(
-			"Request: %s | Path: %s | Status: %d | Duration: %v | IP: %s | User-Agent: %s",
-			r.Method,
-			r.URL.Path,
-			lrw.statusCode,
-			time.Since(startTime),
-			r.RemoteAddr,
-			r.UserAgent(),
-		)
+	
+	// Close MongoDB connection
+	if err := client.Disconnect(ctx); err != nil {
+		logger.Fatalf("MongoDB disconnect failed: %v", err)
 	}
-}
-
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func newLoggingResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
-	return &loggingResponseWriter{w, http.StatusOK}
-}
-
-func (lrw *loggingResponseWriter) WriteHeader(code int) {
-	lrw.statusCode = code
-	lrw.ResponseWriter.WriteHeader(code)
+	
+	logger.Println("Server gracefully stopped")
 }
