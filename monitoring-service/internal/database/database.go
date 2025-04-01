@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"monitoring-service/internal/uptime"
 )
 
 type OwnershipStatus int
@@ -247,7 +248,6 @@ func (d *Database) GetClient(address string) (*ClientInfo, error) {
 	return &client, nil
 }
 
-// Add this new function at the end of the file
 func (d *Database) GetAllClients() ([]ClientInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -266,86 +266,29 @@ func (d *Database) GetAllClients() ([]ClientInfo, error) {
 		return nil, err
 	}
 
-	// get all uptime percentage, weekly uptime percentage, status for each client
+	// Create uptime calculator
+	uptimeCalc := uptime.NewCalculator(d.heartbeats)
+
+	// Calculate uptime percentages and status for each client
 	for i, client := range clients {
-		// Calculate all-time uptime percentage
-		pipeline := mongo.Pipeline{
-			bson.D{{Key: "$match", Value: bson.D{{Key: "client_address", Value: client.Address}}}},
-			bson.D{{Key: "$group", Value: bson.D{
-				{Key: "_id", Value: "$client_address"},
-				{Key: "total_duration", Value: bson.D{{Key: "$sum", Value: "$duration"}}},
-			}}},
-		}
-
-		cursor, err := d.heartbeats.Aggregate(ctx, pipeline)
+		// Calculate uptime percentages (all-time and weekly)
+		allUptimePercentage, weeklyUptimePercentage, err := uptimeCalc.GetUptimePercentages(
+			ctx, 
+			client.Address,
+			client.CreatedAt,
+		)
+		
 		if err != nil {
-			d.logger.Printf("Error getting sum of heartbeats duration: %v", err)
-			return nil, err
+			d.logger.Printf("Error calculating uptime for client %s: %v", client.Address, err)
+			// Continue with next client instead of failing entirely
+			continue
 		}
-		defer cursor.Close(ctx)
+		
+		// Update client with calculated percentages
+		clients[i].AllUptimePercentage = allUptimePercentage
+		clients[i].WeeklyUptimePercentage = weeklyUptimePercentage
 
-		var result struct {
-			ID            string `bson:"_id"`
-			TotalDuration int64  `bson:"total_duration"`
-		}
-		totalDuration := int64(0)
-		if cursor.Next(ctx) {
-			if err := cursor.Decode(&result); err != nil {
-				d.logger.Printf("Error decoding result: %v", err)
-				return nil, err
-			}
-			totalDuration = result.TotalDuration
-		}
-
-		// Set all-time uptime percentage
-		allTotalDuration := int64(time.Since(client.CreatedAt) / time.Second)
-		if allTotalDuration > 0 {
-			clients[i].AllUptimePercentage = min(float64(totalDuration) / float64(allTotalDuration) * 100, 100)
-		} else {
-			clients[i].AllUptimePercentage = 0
-		}
-
-		// Calculate weekly uptime percentage
-		weeklyPipeline := mongo.Pipeline{
-			bson.D{{Key: "$match", Value: bson.D{
-				{Key: "client_address", Value: client.Address},
-				{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: time.Now().Add(-7 * 24 * time.Hour)}}},
-			}}},
-			bson.D{{Key: "$group", Value: bson.D{
-				{Key: "_id", Value: "$client_address"},
-				{Key: "total_duration", Value: bson.D{{Key: "$sum", Value: "$duration"}}},
-			}}},
-		}
-
-		cursor, err = d.heartbeats.Aggregate(ctx, weeklyPipeline)
-		if err != nil {
-			d.logger.Printf("Error getting weekly heartbeats duration: %v", err)
-			return nil, err
-		}
-		defer cursor.Close(ctx)
-
-		var weeklyResult struct {
-			ID            string `bson:"_id"`
-			TotalDuration int64  `bson:"total_duration"`
-		}
-		weeklyDuration := int64(0)
-		if cursor.Next(ctx) {
-			if err := cursor.Decode(&weeklyResult); err != nil {
-				d.logger.Printf("Error decoding weekly result: %v", err)
-				return nil, err
-			}
-			weeklyDuration = weeklyResult.TotalDuration
-		}
-
-		// Set weekly uptime percentage
-		weeklyTotalDuration := float64(min(7 * 24 * 3600, int64(time.Since(client.CreatedAt) / time.Second)))
-		if weeklyDuration > 0 {
-			clients[i].WeeklyUptimePercentage = min(float64(weeklyDuration) / weeklyTotalDuration * 100, 100)
-		} else {
-			clients[i].WeeklyUptimePercentage = 0
-		}
-
-		// Set status
+		// Set status based on last heartbeat
 		if time.Since(client.LastHeartbeat) > 10 * time.Minute {
 			clients[i].Status = "Offline"
 		} else if time.Since(client.LastHeartbeat) > 5 * time.Minute {
