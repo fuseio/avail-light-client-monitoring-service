@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"monitoring-service/internal/uptime"
 )
 
 type UserType string
@@ -27,6 +28,8 @@ type User struct {
 	Operators            map[string]int64   `bson:"operators,omitempty"`  // map[operatorAddress]delegatedAmount
 	AllUptimePercentage  float64            `bson:"all_uptime_percentage,omitempty"`
 	Status               string             `bson:"status,omitempty"`
+	CommissionRate       float64            `bson:"commission_rate,omitempty"`
+	RewardAddress        string             `bson:"reward_address,omitempty"`
 }
 
 func (d *Database) GetOrCreateUser(address string, userType UserType) (*User, error) {
@@ -61,38 +64,27 @@ func (d *Database) GetOrCreateUser(address string, userType UserType) (*User, er
 				updateFields["status"] = "Active"
 			}
 			
-			// Calculate all-time uptime percentage
-			pipeline := mongo.Pipeline{
-				bson.D{{Key: "$match", Value: bson.D{{Key: "client_address", Value: address}}}},
-				bson.D{{Key: "$group", Value: bson.D{
-					{Key: "_id", Value: "$client_address"},
-					{Key: "total_duration", Value: bson.D{{Key: "$sum", Value: "$duration"}}},
-				}}},
+			// Use uptime calculator instead of direct aggregation
+			uptimeCalc := uptime.NewCalculator(d.heartbeats)
+			allUptimePercentage, _, err := uptimeCalc.GetUptimePercentages(
+				ctx,
+				address,
+				clientInfo.CreatedAt,
+			)
+			
+			if err == nil {
+				user.AllUptimePercentage = allUptimePercentage
+				updateFields["all_uptime_percentage"] = allUptimePercentage
+			} else {
+				d.logger.Printf("Warning: Failed to calculate uptime for user %s: %v", address, err)
 			}
 			
-			cursor, aggrErr := d.heartbeats.Aggregate(ctx, pipeline)
-			if aggrErr == nil {
-				defer cursor.Close(ctx)
-				
-				var result struct {
-					ID            string `bson:"_id"`
-					TotalDuration int64  `bson:"total_duration"`
-				}
-				totalDuration := int64(0)
-				if cursor.Next(ctx) {
-					if err := cursor.Decode(&result); err == nil {
-						totalDuration = result.TotalDuration
-					}
-				}
-				
-				// Set all-time uptime percentage
-				allTotalDuration := int64(time.Since(clientInfo.CreatedAt) / time.Second)
-				if allTotalDuration > 0 {
-					uptimePercentage := min(float64(totalDuration) / float64(allTotalDuration) * 100, 100)
-					user.AllUptimePercentage = uptimePercentage
-					updateFields["all_uptime_percentage"] = uptimePercentage
-				}
-			}
+			user.CommissionRate = clientInfo.CommissionRate
+			updateFields["commission_rate"] = clientInfo.CommissionRate
+			
+			// Set reward address from client's reward collector address
+			user.RewardAddress = clientInfo.RewardCollectorAddress
+			updateFields["reward_address"] = clientInfo.RewardCollectorAddress
 		}
 	}
 
@@ -164,10 +156,23 @@ func (d *Database) GetOrCreateUser(address string, userType UserType) (*User, er
 				newUser.Status = "Active"
 			}
 			
-			// Set initial uptime percentage if available
-			if clientInfo.AllUptimePercentage > 0 {
-				newUser.AllUptimePercentage = clientInfo.AllUptimePercentage
+			// Use uptime calculator for new users too
+			uptimeCalc := uptime.NewCalculator(d.heartbeats)
+			allUptimePercentage, _, err := uptimeCalc.GetUptimePercentages(
+				ctx,
+				address,
+				clientInfo.CreatedAt,
+			)
+			
+			if err == nil {
+				newUser.AllUptimePercentage = allUptimePercentage
 			}
+			
+			// Set commission rate from client info
+			newUser.CommissionRate = clientInfo.CommissionRate
+			
+			// Set reward address from client info
+			newUser.RewardAddress = clientInfo.RewardCollectorAddress
 		}
 	}
 	
@@ -296,6 +301,11 @@ func (d *Database) SyncOperatorDelegators(operatorAddress string) error {
 		// Update uptime percentage
 		if clientInfo.AllUptimePercentage > 0 {
 			updateData["all_uptime_percentage"] = clientInfo.AllUptimePercentage
+		}
+		
+		// Update reward address
+		if clientInfo.RewardCollectorAddress != "" {
+			updateData["reward_address"] = clientInfo.RewardCollectorAddress
 		}
 	}
 	
