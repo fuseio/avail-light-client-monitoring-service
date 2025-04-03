@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 type Database struct {
@@ -39,7 +41,6 @@ func (d *Database) GetMongoDatabase() *mongo.Database {
 func (d *Database) GetMongoClient() *mongo.Client {
 	return d.client
 }
-
 
 func (d *Database) GetDelegationsToOperator(address string) ([]DelegationRecord, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -139,10 +140,6 @@ func (d *Database) StoreRewardRecord(record *RewardRecord) error {
 	return nil
 }
 
-
-
-
-
 // Add indexes for better performance
 func (db *Database) AddIndexes() error {
 	_, err := db.db.Collection("rewards").Indexes().CreateOne(context.TODO(), mongo.IndexModel{
@@ -159,11 +156,6 @@ func (db *Database) AddIndexes() error {
 	return nil
 }
 
-
-
-
-
-// GetDelegationsFromDelegator returns all delegations made by a delegator
 func (d *Database) GetDelegationsFromDelegator(delegatorAddress string) ([]DelegationRecord, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -182,7 +174,6 @@ func (d *Database) GetDelegationsFromDelegator(delegatorAddress string) ([]Deleg
 	return delegations, nil
 }
 
-// GetUserByAddress gets a user by address and type
 func (d *Database) GetUserByAddress(address string, userType string) (*User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -200,12 +191,10 @@ func (d *Database) GetUserByAddress(address string, userType string) (*User, err
 	return &user, nil
 }
 
-// StoreRewardSummary stores a reward summary for a cycle
 func (d *Database) StoreRewardSummary(summary *RewardSummary) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Check if we've already processed this cycle
 	var existingSummary RewardSummary
 	err := d.rewardSummaries.FindOne(ctx, bson.M{"cycle_id": summary.CycleID}).Decode(&existingSummary)
 	if err == nil {
@@ -214,11 +203,67 @@ func (d *Database) StoreRewardSummary(summary *RewardSummary) error {
 		return fmt.Errorf("error checking existing reward summary: %v", err)
 	}
 
-	// Insert the new summary
 	_, err = d.rewardSummaries.InsertOne(ctx, summary)
 	if err != nil {
 		return fmt.Errorf("failed to store reward summary: %v", err)
 	}
 
 	return nil
+}
+
+func Connect(uri, dbName string, logger *log.Logger) (*Database, error) {
+	var client *mongo.Client
+	var err error
+	
+	maxRetries := 5
+	retryDelay := 2 * time.Second
+	
+	for i := 0; i < maxRetries; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		
+		clientOptions := options.Client().
+			ApplyURI(uri).
+			SetRetryWrites(true).
+			SetRetryReads(true).
+			SetMaxPoolSize(100).
+			SetMinPoolSize(10)
+		
+		client, err = mongo.Connect(ctx, clientOptions)
+		if err == nil {
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pingCancel()
+			
+			err = client.Ping(pingCtx, readpref.Primary())
+			if err == nil {
+				logger.Println("Successfully connected to MongoDB")
+				break
+			}
+		}
+		
+		logger.Printf("Failed to connect to MongoDB (attempt %d/%d): %v", i+1, maxRetries, err)
+		
+		if i < maxRetries-1 {
+			time.Sleep(retryDelay)
+			retryDelay *= 2 // Exponential backoff
+		}
+	}
+	
+	if err != nil {
+		return nil, errors.New("failed to connect to MongoDB after multiple attempts")
+	}
+	
+	db := New(client, dbName, logger)
+	
+	if err := db.AddIndexes(); err != nil {
+		logger.Printf("Warning: Failed to create indexes: %v", err)
+	}
+	
+	return db, nil
+}
+
+func (d *Database) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return d.client.Disconnect(ctx)
 }

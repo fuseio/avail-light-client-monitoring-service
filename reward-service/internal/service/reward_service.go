@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"reward-service/internal/database"
@@ -12,7 +14,9 @@ type RewardService struct {
 	db             *database.Database
 	logger         *log.Logger
 	currentCycleID string
+	mu             sync.RWMutex // Protects currentCycleID
 	done           chan struct{}
+	wg             sync.WaitGroup
 }
 
 func New(db *database.Database, logger *log.Logger) *RewardService {
@@ -32,7 +36,15 @@ func NewRewardService(db *database.Database, logger *log.Logger) *RewardService 
 }
 
 func (s *RewardService) SetCycleID(cycleID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.currentCycleID = cycleID
+}
+
+func (s *RewardService) GetCycleID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.currentCycleID
 }
 
 func (s *RewardService) logReward(rewardType string, address string, points int64, nftCount int64, delegationCount int64) {
@@ -43,7 +55,10 @@ func (s *RewardService) logReward(rewardType string, address string, points int6
 func (s *RewardService) ScheduleRewardsAt(hour, minute int) {
 	s.logger.Printf("Scheduling rewards to run daily at %02d:%02d", hour, minute)
 	
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
+		
 		for {
 			now := time.Now()
 			next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
@@ -61,11 +76,37 @@ func (s *RewardService) ScheduleRewardsAt(hour, minute int) {
 				cycleID := fmt.Sprintf("CYCLE_%s", now.Format("2006-01-02"))
 				s.SetCycleID(cycleID)
 				
-				if err := s.ProcessRewards(); err != nil {
-					s.logger.Printf("ERROR: Failed to process rewards: %v", err)
-				} else {
-					s.logger.Printf("Successfully processed rewards at scheduled time %s", 
-						now.Format("2006-01-02 15:04:05"))
+				maxRetries := 3
+				backoff := 1 * time.Minute
+				var err error
+				
+				for attempt := 0; attempt <= maxRetries; attempt++ {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					err = s.ProcessRewardsWithContext(ctx)
+					cancel()
+					
+					if err == nil {
+						s.logger.Printf("Successfully processed rewards at scheduled time %s", 
+							now.Format("2006-01-02 15:04:05"))
+						break
+					}
+					
+					if attempt == maxRetries {
+						s.logger.Printf("ERROR: Failed to process rewards after %d attempts: %v", 
+							maxRetries+1, err)
+						break
+					}
+					
+					retryDelay := backoff * time.Duration(1<<uint(attempt))
+					s.logger.Printf("ERROR: Failed to process rewards (attempt %d/%d): %v. Retrying in %v...", 
+						attempt+1, maxRetries+1, err, retryDelay)
+					
+					select {
+					case <-time.After(retryDelay):
+						continue
+					case <-s.done:
+						return
+					}
 				}
 			case <-s.done:
 				return
@@ -77,13 +118,28 @@ func (s *RewardService) ScheduleRewardsAt(hour, minute int) {
 func (s *RewardService) Stop() {
 	s.logger.Println("Stopping reward service...")
 	close(s.done)
+	
+	waitCh := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(waitCh)
+	}()
+	
+	select {
+	case <-waitCh:
+		s.logger.Println("Reward service stopped gracefully")
+	case <-time.After(10 * time.Second):
+		s.logger.Println("Reward service stop timed out, some tasks may not have completed")
+	}
 }
 
-func (s *RewardService) ProcessRewards() error {
+func (s *RewardService) ProcessRewardsWithContext(ctx context.Context) error {
 	s.logger.Println("Processing rewards...")
 	
+	cycleID := s.GetCycleID()
+	
 	rewardSummary := &database.RewardSummary{
-		CycleID:          s.currentCycleID,
+		CycleID:          cycleID,
 		TotalRewards:     0,
 		TotalPoints:      0,
 		OperatorRewards:  0,
@@ -93,6 +149,12 @@ func (s *RewardService) ProcessRewards() error {
 	
 	operatorCommissions := make(map[string]int64)
 	
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	
 	s.logger.Println("Processing delegator rewards...")
 	delegators, err := s.db.GetAllDelegators()
 	if err != nil {
@@ -100,11 +162,23 @@ func (s *RewardService) ProcessRewards() error {
 	}
 	
 	for _, delegator := range delegators {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		
 		points := s.processDelegatorRewards(delegator.Address, operatorCommissions)
 		if points > 0 {
 			rewardSummary.DelegatorRewards++
 			rewardSummary.TotalPoints += points
 		}
+	}
+	
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	
 	s.logger.Println("Processing operator rewards...")
@@ -114,6 +188,12 @@ func (s *RewardService) ProcessRewards() error {
 	}
 	
 	for _, operator := range operators {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		
 		commission := operatorCommissions[operator.Address]
 		points := s.processOperatorRewards(operator.Address, commission)
 		if points > 0 {
@@ -133,6 +213,11 @@ func (s *RewardService) ProcessRewards() error {
 	return nil
 }
 
+func (s *RewardService) ProcessRewards() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return s.ProcessRewardsWithContext(ctx)
+}
 
 func (s *RewardService) processDelegatorRewards(delegatorAddress string, operatorCommissions map[string]int64) int64 {
 	delegations, err := s.db.GetDelegationsFromDelegator(delegatorAddress)
@@ -199,7 +284,7 @@ func (s *RewardService) processDelegatorRewards(delegatorAddress string, operato
 			Points:          points,
 			CreatedAt:       time.Now(),
 			IsClaimed:       false,
-			CycleID:         s.currentCycleID,
+			CycleID:         s.GetCycleID(),
 			Type:            "DELEGATOR",
 		}
 		
@@ -269,7 +354,7 @@ func (s *RewardService) processOperatorRewards(operatorAddress string, commissio
 		Points:          totalPoints,
 		CreatedAt:       time.Now(),
 		IsClaimed:       false,
-		CycleID:         s.currentCycleID,
+		CycleID:         s.GetCycleID(),
 		Type:            "OPERATOR",        
 	}
 	
