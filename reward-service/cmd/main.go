@@ -6,118 +6,113 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
-
-	"github.com/gorilla/mux"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"reward-service/internal/api"
 	"reward-service/internal/database"
 	"reward-service/internal/service"
+
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
-	logger := log.New(os.Stdout, "[REWARD-SERVICE] ", log.LstdFlags)
+	logger := log.New(os.Stdout, "[REWARD] ", log.LstdFlags)
 	logger.Println("Starting reward service...")
 
-	// Connect to MongoDB
-	mongoURI := os.Getenv("MONGO_URI")
-	if mongoURI == "" {
-		mongoURI = "mongodb://localhost:27017"
-	}
+	mongoURI := getEnv("MONGO_URI", "mongodb://localhost:27017")
+	dbName := getEnv("MONGO_DB", "rewards")
 	
-	mongoDB := os.Getenv("MONGO_DB")
-	if mongoDB == "" {
-		mongoDB = "lc-monitoring"
-	}
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	client, err := connectMongoDB(mongoURI)
 	if err != nil {
 		logger.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
+	defer client.Disconnect(context.Background())
 	
-	// Ping the database
-	if err := client.Ping(ctx, nil); err != nil {
-		logger.Fatalf("Failed to ping MongoDB: %v", err)
-	}
+	db := database.New(client, dbName, logger)
 	
-	logger.Printf("Connected to MongoDB: %s", mongoURI)
-	
-	// Create database wrapper
-	db := client.Database(mongoDB)
-	dbWrapper := database.NewDatabase(client, db, logger)
-	
-	// Create database indexes
-	if err := dbWrapper.AddIndexes(); err != nil {
-		logger.Printf("Warning: Failed to create database indexes: %v", err)
-	}
-	
-	// Create API handlers
-	rewardHandler := api.NewRewardHandler(dbWrapper, logger)
-	
-	// Set up router
-	router := mux.NewRouter()
-	rewardHandler.RegisterRoutes(router)
-	
-	// Add health check endpoint
-	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	}).Methods("GET")
-	
-	// Start reward service
 	rewardService := service.NewRewardService(db, logger)
-	rewardService.ScheduleRewards()
 	
-	// Get port from environment
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8081"
-	}
-	if port[0] == ':' {
-		port = port[1:]
-	}
+	rewardHandler := api.NewRewardHandler(db, logger)
 	
-	// Create and start server
+	mux := http.NewServeMux()
+	
+	mux.HandleFunc("/rewards/claim-all", rewardHandler.HandleClaimAllRewards)
+	
+	addr := getEnv("HTTP_ADDR", ":8081")
 	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: router,
+		Addr:    addr,
+		Handler: mux,
 	}
 	
-	// Start server in a goroutine
 	go func() {
-		logger.Printf("Server listening on port %s", port)
+		logger.Printf("Starting HTTP server on %s", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("Failed to start server: %v", err)
+			logger.Fatalf("HTTP server error: %v", err)
 		}
 	}()
 	
-	// Set up graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
+	rewardHour := getEnvInt("REWARD_HOUR", 15) 
+	rewardMinute := getEnvInt("REWARD_MINUTE", 22) 
+	logger.Printf("Configuring reward schedule to run at %02d:%02d", rewardHour, rewardMinute)
+	rewardService.ScheduleRewardsAt(rewardHour, rewardMinute)
 	
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	
+	<-stop
 	logger.Println("Shutting down...")
 	
-	// Stop the reward scheduler
 	rewardService.Stop()
 	
-	// Shut down the server
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Fatalf("Server shutdown failed: %v", err)
+		logger.Fatalf("Server shutdown error: %v", err)
 	}
 	
-	// Close MongoDB connection
-	if err := client.Disconnect(ctx); err != nil {
-		logger.Fatalf("MongoDB disconnect failed: %v", err)
+	logger.Println("Server stopped.")
+}
+
+func connectMongoDB(uri string) (*mongo.Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	clientOptions := options.Client().ApplyURI(uri)
+	client, err := mongo.Connect(ctx, clientOptions)
+	if err != nil {
+		return nil, err
 	}
 	
-	logger.Println("Server gracefully stopped")
+	err = client.Ping(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	return client, nil
+}
+
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	
+	return value
 }

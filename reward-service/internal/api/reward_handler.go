@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"time"
 
 	"github.com/gorilla/mux"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"reward-service/internal/database"
-	"reward-service/internal/service"
 )
 
 type RewardHandler struct {
@@ -26,25 +22,6 @@ func NewRewardHandler(db *database.Database, logger *log.Logger) *RewardHandler 
 	}
 }
 
-type ClaimRewardRequest struct {
-	RewardID string `json:"reward_id"`
-	Address  string `json:"address"`
-}
-
-type ClaimRewardResponse struct {
-	Success      bool      `json:"success"`
-	Message      string    `json:"message"`
-	Points       int64     `json:"points,omitempty"`
-	TotalPoints  int64     `json:"total_points,omitempty"`
-	ClaimedAt    time.Time `json:"claimed_at,omitempty"`
-}
-
-type GetUserRewardsResponse struct {
-	Rewards      []database.RewardRecord `json:"rewards"`
-	TotalPoints  int64                   `json:"total_points"`
-	ClaimedPoints int64                  `json:"claimed_points"`
-}
-
 type ClaimAllRewardsRequest struct {
 	Address string `json:"address"`
 }
@@ -54,79 +31,6 @@ type ClaimAllRewardsResponse struct {
 	Message      string `json:"message"`
 	ClaimedCount int    `json:"claimed_count"`
 	TotalPoints  int64  `json:"total_points"`
-}
-
-func (h *RewardHandler) ClaimReward(w http.ResponseWriter, r *http.Request) {
-	var req ClaimRewardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	rewardID, err := primitive.ObjectIDFromHex(req.RewardID)
-	if err != nil {
-		http.Error(w, "Invalid reward ID", http.StatusBadRequest)
-		return
-	}
-
-	err = h.db.ClaimReward(rewardID, req.Address)
-	if err != nil {
-		h.logger.Printf("ERROR: Failed to claim reward: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	totalPoints, err := h.db.GetUserClaimedPoints(req.Address)
-	if err != nil {
-		h.logger.Printf("ERROR: Failed to get user points: %v", err)
-	}
-
-	reward, err := h.db.GetRewardByID(rewardID)
-	if err != nil {
-		h.logger.Printf("ERROR: Failed to get reward details: %v", err)
-	}
-
-	resp := ClaimRewardResponse{
-		Success:     true,
-		Message:     "Reward claimed successfully",
-		Points:      reward.Points,
-		TotalPoints: totalPoints,
-		ClaimedAt:   time.Now(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (h *RewardHandler) GetUserRewards(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	address := vars["address"]
-
-	rewards, err := h.db.GetRewardsByAddress(address)
-	if err != nil {
-		h.logger.Printf("ERROR: Failed to get rewards: %v", err)
-		http.Error(w, "Failed to get rewards", http.StatusInternalServerError)
-		return
-	}
-
-	claimedPoints, err := h.db.GetUserClaimedPoints(address)
-	if err != nil {
-		h.logger.Printf("ERROR: Failed to get user claimed points: %v", err)
-	}
-
-	var totalPoints int64
-	for _, reward := range rewards {
-		totalPoints += reward.Points
-	}
-
-	resp := GetUserRewardsResponse{
-		Rewards:       rewards,
-		TotalPoints:   totalPoints,
-		ClaimedPoints: claimedPoints,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }
 
 func (h *RewardHandler) HandleClaimAllRewards(w http.ResponseWriter, r *http.Request) {
@@ -173,37 +77,5 @@ func (h *RewardHandler) HandleClaimAllRewards(w http.ResponseWriter, r *http.Req
 }
 
 func (h *RewardHandler) RegisterRoutes(router *mux.Router) {
-	router.HandleFunc("/rewards/claim", h.ClaimReward).Methods("POST")
 	router.HandleFunc("/rewards/claim-all", h.HandleClaimAllRewards).Methods("POST")
-	router.HandleFunc("/clients/{address}/rewards", h.GetUserRewards).Methods("GET")
-	router.HandleFunc("/admin/process-rewards", h.ProcessRewards).Methods("POST")
-}
-
-func (h *RewardHandler) ProcessRewards(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("Admin-Token")
-	if token != os.Getenv("ADMIN_TOKEN") {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	var req struct {
-		CycleID string `json:"cycle_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		req.CycleID = ""
-	}
-
-	rewardService := service.NewRewardService(h.db.GetMongoDatabase(), h.logger)
-	err := rewardService.ProcessRewardsManually(req.CycleID)
-	if err != nil {
-		h.logger.Printf("ERROR: Failed to process rewards: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to process rewards: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Rewards processed successfully",
-	})
 }
